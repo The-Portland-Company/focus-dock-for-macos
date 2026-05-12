@@ -57,11 +57,26 @@ enum SettingsRouter {
     static let openFolder = Notification.Name("FocusDock.OpenFolderInSettings")
 }
 
+/// Runtime-only badge state for a single app. Keyed by app name (lowercased)
+/// because the macOS Dock AX tree exposes apps by display name, not bundle path.
+struct AppBadgeState: Equatable {
+    var badgeCount: String?
+    var needsAttention: Bool
+}
+
 final class AppLibrary: ObservableObject {
     static let shared = AppLibrary()
 
     @Published var items: [DockItem] = [] {
         didSet { save() }
+    }
+
+    /// Runtime badge state keyed by lowercased app name. Populated by
+    /// `BadgeMonitor` on the main thread. Not persisted.
+    @Published var badgeStates: [String: AppBadgeState] = [:]
+
+    func badgeState(for appName: String) -> AppBadgeState? {
+        badgeStates[appName.lowercased()]
     }
 
     private let storageURL: URL = {

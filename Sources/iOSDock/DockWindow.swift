@@ -46,7 +46,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         )
         win.backgroundColor = .clear
         win.isOpaque = false
-        win.hasShadow = true
+        win.hasShadow = false
         win.level = .floating
         win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         win.contentViewController = host
@@ -187,33 +187,6 @@ struct DockView: View {
         prefs.edge == .left || prefs.edge == .right
     }
 
-    private var dockShape: UnevenRoundedRectangle {
-        let r = CGFloat(prefs.cornerRadius)
-        // When flush, square off the corners on the side touching the screen edge.
-        let flush = prefs.flushBottom
-        var topL: CGFloat = r, topR: CGFloat = r, botL: CGFloat = r, botR: CGFloat = r
-        if flush {
-            switch prefs.edge {
-            case .bottom: botL = 0; botR = 0
-            case .top:    topL = 0; topR = 0
-            case .left:   topL = 0; botL = 0
-            case .right:  topR = 0; botR = 0
-            }
-        }
-        return UnevenRoundedRectangle(
-            topLeadingRadius: topL,
-            bottomLeadingRadius: botL,
-            bottomTrailingRadius: botR,
-            topTrailingRadius: topR,
-            style: .continuous
-        )
-    }
-
-    private var restingThickness: CGFloat {
-        // Internal padding + resting icon size.
-        iconSize + CGFloat(isVertical ? prefs.paddingLeft + prefs.paddingRight : prefs.paddingTop + prefs.paddingBottom) + 8
-    }
-
     // Stable UUID for the virtual Finder entry so SwiftUI doesn't churn the
     // view identity on every render (which was causing the hover-jump).
     private static let finderID = UUID(uuidString: "F1DE0000-0000-0000-0000-000000000001")!
@@ -245,29 +218,6 @@ struct DockView: View {
         }
     }
 
-    @ViewBuilder
-    private var dockChrome: some View {
-        let editing = prefs.isEditingLayout
-        let bd = prefs.borderColor
-        let bg = prefs.backgroundColor
-        let baseBorder = prefs.showBorder
-            ? Color(.sRGB, red: bd.r, green: bd.g, blue: bd.b, opacity: bd.a)
-            : Color.clear
-        let borderColor = editing ? Color.accentColor.opacity(0.9) : baseBorder
-        let borderWidth: CGFloat = editing ? 2 : CGFloat(prefs.borderWidth)
-
-        ZStack {
-            VisualEffectBlur(material: .popover, blendingMode: .behindWindow)
-                .clipShape(dockShape)
-            if prefs.tintBackground {
-                dockShape
-                    .fill(Color(.sRGB, red: bg.r, green: bg.g, blue: bg.b, opacity: bg.a))
-            }
-            dockShape
-                .strokeBorder(borderColor, lineWidth: borderWidth)
-        }
-    }
-
     var body: some View {
         GeometryReader { proxy in
             let avail = isVertical ? proxy.size.height : proxy.size.width
@@ -281,12 +231,6 @@ struct DockView: View {
             let scaledSpacing = prefs.fillWidth ? autoSpacing : spacing * scale
 
             ZStack(alignment: dockAlignment) {
-                dockChrome
-                    .frame(
-                        width: isVertical ? restingThickness : nil,
-                        height: isVertical ? nil : restingThickness
-                    )
-
                 Group {
                     if isVertical {
                         VStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
@@ -305,7 +249,6 @@ struct DockView: View {
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: dockAlignment)
         }
-        .padding(prefs.flushBottom ? 0 : 8)
         .ignoresSafeArea()
         .coordinateSpace(name: "dock")
         .onContinuousHover(coordinateSpace: .named("dock")) { phase in
@@ -441,6 +384,9 @@ struct DockItemView: View {
                         let displaySize = iconSize * scale
                         iconContent
                             .frame(width: displaySize, height: displaySize)
+                            .overlay(alignment: .topTrailing) {
+                                badgeOverlay(displaySize: displaySize)
+                            }
                             .opacity(isDragging ? 0.85 : 1.0)
                             .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
                     }
@@ -514,6 +460,34 @@ struct DockItemView: View {
                 .frame(width: iconSize, height: iconSize)
         case .folder(let f):
             FolderIconView(folder: f, size: iconSize)
+        }
+    }
+
+    /// Numeric badge (red capsule) + attention dot (pulsing red circle),
+    /// matched in size to the currently-displayed icon so they scale with
+    /// the magnification system.
+    @ViewBuilder private func badgeOverlay(displaySize: CGFloat) -> some View {
+        if case .app(let a) = item, let state = library.badgeState(for: a.name) {
+            let badgeFont = max(8, displaySize * 0.28)
+            let badgePadH = max(4, displaySize * 0.10)
+            let badgePadV = max(1, displaySize * 0.04)
+            let dotSize = max(8, displaySize * 0.20)
+            if let count = state.badgeCount {
+                Text(count)
+                    .font(.system(size: badgeFont, weight: .bold, design: .rounded))
+                    .foregroundStyle(.white)
+                    .padding(.horizontal, badgePadH)
+                    .padding(.vertical, badgePadV)
+                    .background(
+                        Capsule().fill(Color.red)
+                            .overlay(Capsule().strokeBorder(Color.white.opacity(0.9), lineWidth: max(0.5, displaySize * 0.015)))
+                    )
+                    .offset(x: displaySize * 0.08, y: -displaySize * 0.08)
+                    .shadow(color: Color.black.opacity(0.25), radius: 1, x: 0, y: 1)
+            } else if state.needsAttention {
+                AttentionDot(size: dotSize)
+                    .offset(x: displaySize * 0.08, y: -displaySize * 0.08)
+            }
         }
     }
 
@@ -778,8 +752,6 @@ struct FolderPopover: View {
     }
 }
 
-// MARK: - Visual Effect Blur
-
 // MARK: - Native tooltip helper
 
 /// Sets `toolTip` on an underlying NSView. SwiftUI's `.help()` doesn't reliably
@@ -803,21 +775,31 @@ extension View {
     }
 }
 
-struct VisualEffectBlur: NSViewRepresentable {
-    var material: NSVisualEffectView.Material
-    var blendingMode: NSVisualEffectView.BlendingMode
-
-    func makeNSView(context: Context) -> NSVisualEffectView {
-        let v = NSVisualEffectView()
-        v.material = material
-        v.blendingMode = blendingMode
-        v.state = .active
-        return v
-    }
-    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
-}
-
 // MARK: - Registry-updating GeometryReader extension
+
+// MARK: - Attention Dot
+
+/// Pulsing red dot used when an app has requested user attention. Matches
+/// the visual weight of the numeric badge so the two states feel cohesive.
+struct AttentionDot: View {
+    let size: CGFloat
+    @State private var pulse: Bool = false
+
+    var body: some View {
+        Circle()
+            .fill(Color.red)
+            .frame(width: size, height: size)
+            .overlay(Circle().strokeBorder(Color.white.opacity(0.9), lineWidth: max(0.5, size * 0.08)))
+            .shadow(color: Color.black.opacity(0.25), radius: 1, x: 0, y: 1)
+            .scaleEffect(pulse ? 1.15 : 0.85)
+            .opacity(pulse ? 1.0 : 0.7)
+            .onAppear {
+                withAnimation(.easeInOut(duration: 0.7).repeatForever(autoreverses: true)) {
+                    pulse = true
+                }
+            }
+    }
+}
 
 private struct FrameTracker: ViewModifier {
     let id: UUID
