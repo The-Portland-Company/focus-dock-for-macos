@@ -268,9 +268,9 @@ struct DockView: View {
                     }
                 }
             }
-            .frame(width: proxy.size.width, height: proxy.size.height)
+            .frame(width: proxy.size.width, height: proxy.size.height, alignment: dockAlignment)
         }
-        .padding(prefs.flushBottom && prefs.edge == .bottom ? 0 : 8)
+        .padding(prefs.flushBottom ? 0 : 8)
         .ignoresSafeArea()
         .coordinateSpace(name: "dock")
         .onContinuousHover(coordinateSpace: .named("dock")) { phase in
