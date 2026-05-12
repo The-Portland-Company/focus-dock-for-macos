@@ -2,6 +2,8 @@
 
 An iOS-style replacement dock for macOS that supports **folder creation by drag-and-hold**, the one Dock feature Apple never shipped on the Mac.
 
+> For implementation history, architectural decisions, and bug-by-bug context, see [`docs/context.md`](docs/context.md).
+
 Drag any app onto another, hold for about a second, and a folder forms — exactly like iOS. Drop and the app drops in.
 
 ---

@@ -181,7 +181,7 @@ struct DockView: View {
 
     // Stable UUID for the virtual Finder entry so SwiftUI doesn't churn the
     // view identity on every render (which was causing the hover-jump).
-    private static let finderID = UUID(uuidString: "F1ND3R00-0000-0000-0000-000000000001")!
+    private static let finderID = UUID(uuidString: "F1DE0000-0000-0000-0000-000000000001")!
     private static let finderEntry = AppEntry(id: finderID,
                                               path: "/System/Library/CoreServices/Finder.app",
                                               name: "Finder")
