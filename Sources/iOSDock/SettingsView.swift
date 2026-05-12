@@ -285,12 +285,6 @@ struct SettingsView: View {
     private var generalTab: some View {
         Form {
             Section("Presentation") {
-                settingRow(.showDockIcon) {
-                    Toggle("Show Dock icon", isOn: Binding(
-                        get: { prefs.showDockIcon },
-                        set: { prefs.showDockIcon = $0 }
-                    ))
-                }
                 settingRow(.showMenuBarIcon) {
                     Toggle("Show menu-bar (Toolbar) icon", isOn: Binding(
                         get: { prefs.showMenuBarIcon },
@@ -436,12 +430,12 @@ struct SettingsView: View {
             }
             Section("Shape") {
                 settingRow(.flushBottom) {
-                    Toggle("Flush with bottom of screen", isOn: Binding(
+                    Toggle("Flush with Edge", isOn: Binding(
                         get: { prefs.flushBottom },
                         set: { prefs.flushBottom = $0 }
                     ))
                 }
-                Text("When on, the dock sits against the absolute bottom of the screen and the bottom-left/bottom-right corners are squared off. Applies when the dock is on the bottom edge.")
+                Text("When on, the dock sits against whichever screen edge it's anchored to, and the corners on that edge are squared off.")
                     .font(.caption).foregroundStyle(.secondary)
                 settingRow(.cornerRadius) {
                     HStack {

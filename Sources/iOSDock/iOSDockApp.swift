@@ -82,8 +82,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     func applyPresentationMode() {
-        let showDockIcon = Preferences.shared.showDockIcon
-        NSApp.setActivationPolicy(showDockIcon ? .regular : .accessory)
+        // Always show the Focus: Dock icon in the system Dock area while
+        // running; the system Dock is hidden anyway when the app takes over.
+        NSApp.setActivationPolicy(.regular)
     }
 
     func installStatusItemIfNeeded() {

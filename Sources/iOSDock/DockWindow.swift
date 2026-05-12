@@ -41,9 +41,9 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         win.isMovable = isEditing
 
         let prefs = Preferences.shared
-        // Flush sits the dock against the absolute screen edge — uses full
-        // screen.frame and ignores edgeOffset on that edge.
-        let useFlush = prefs.flushBottom && edge == .bottom
+        // Flush works on any edge now — uses full screen.frame and ignores
+        // edgeOffset on that edge. (Pref key kept as "flushBottom" for storage.)
+        let useFlush = prefs.flushBottom
         let area: NSRect = useFlush ? screen.frame : screen.visibleFrame
 
         let pt = CGFloat(prefs.paddingTop), pb = CGFloat(prefs.paddingBottom)
@@ -53,13 +53,28 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0))
         let iconSize = CGFloat(prefs.iconSize)
         let spacing = CGFloat(prefs.spacing)
+        let isVerticalEdge = (edge == .left || edge == .right)
+        let perpInside = CGFloat(isVerticalEdge ? prefs.paddingLeft + prefs.paddingRight : prefs.paddingLeft + prefs.paddingRight)
+        let perpAlongAxis = CGFloat(isVerticalEdge ? prefs.paddingTop + prefs.paddingBottom : prefs.paddingLeft + prefs.paddingRight)
         let totalIcons = CGFloat(count) * iconSize + CGFloat(max(0, count - 1)) * spacing
-        let magnified = prefs.magnifyOnHover ? CGFloat(prefs.magnifySize) : iconSize
 
-        // Window thickness must accommodate magnified icons + perpendicular padding.
-        // Internal padding is applied INSIDE the dock by DockView itself.
-        let thicknessHorizontal = max(magnified, iconSize) + pt + pb + 8
-        let thicknessVertical = max(magnified, iconSize) + pl + pr + 8
+        // The icons may be compressed to fit; the *effective* icon size is what
+        // actually appears on screen. Dock thickness is derived from the effective
+        // size so the slider value doesn't grow the dock past what's visible.
+        let maxAlong: CGFloat
+        switch edge {
+        case .bottom, .top: maxAlong = area.width - 16 - perpAlongAxis
+        case .left, .right: maxAlong = area.height - 16 - perpAlongAxis
+        }
+        let desiredAlong = totalIcons
+        let alongScale: CGFloat = desiredAlong <= maxAlong ? 1 : max(0.4, maxAlong / desiredAlong)
+        let effectiveIcon = iconSize * alongScale
+        let magnified = prefs.magnifyOnHover ? CGFloat(prefs.magnifySize) : effectiveIcon
+
+        // Dock thickness = (magnified icon head-room) + (perpendicular padding) + small inset.
+        let thicknessHorizontal = max(magnified, effectiveIcon) + pt + pb + 8
+        let thicknessVertical = max(magnified, effectiveIcon) + pl + pr + 8
+        _ = perpInside // silence unused warning if not referenced below
 
         let screenBuffer: CGFloat = 16
         let frame: NSRect
@@ -74,17 +89,20 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
             let desired = totalIcons + pl + pr
             let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
-            frame = NSRect(x: area.midX - length / 2, y: area.maxY - thicknessHorizontal - offset, width: length, height: thicknessHorizontal)
+            let y = useFlush ? area.maxY - thicknessHorizontal : area.maxY - thicknessHorizontal - offset
+            frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal)
         case .left:
             let desired = totalIcons + pt + pb
             let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
-            frame = NSRect(x: area.minX + offset, y: area.midY - length / 2, width: thicknessVertical, height: length)
+            let x = useFlush ? area.minX : area.minX + offset
+            frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical, height: length)
         case .right:
             let desired = totalIcons + pt + pb
             let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
-            frame = NSRect(x: area.maxX - thicknessVertical - offset, y: area.midY - length / 2, width: thicknessVertical, height: length)
+            let x = useFlush ? area.maxX - thicknessVertical : area.maxX - thicknessVertical - offset
+            frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical, height: length)
         }
         win.setFrame(frame, display: true, animate: false)
     }
@@ -136,13 +154,17 @@ struct DockView: View {
 
     private var dockShape: UnevenRoundedRectangle {
         let r = CGFloat(prefs.cornerRadius)
-        // When flushed against the screen bottom on the bottom edge, square off
-        // the corners that touch the screen.
-        let flushB = prefs.flushBottom && prefs.edge == .bottom
-        let topL: CGFloat = r
-        let topR: CGFloat = r
-        let botL: CGFloat = flushB ? 0 : r
-        let botR: CGFloat = flushB ? 0 : r
+        // When flush, square off the corners on the side touching the screen edge.
+        let flush = prefs.flushBottom
+        var topL: CGFloat = r, topR: CGFloat = r, botL: CGFloat = r, botR: CGFloat = r
+        if flush {
+            switch prefs.edge {
+            case .bottom: botL = 0; botR = 0
+            case .top:    topL = 0; topR = 0
+            case .left:   topL = 0; botL = 0
+            case .right:  topR = 0; botR = 0
+            }
+        }
         return UnevenRoundedRectangle(
             topLeadingRadius: topL,
             bottomLeadingRadius: botL,
@@ -412,7 +434,7 @@ struct DockItemView: View {
                     .frame(width: 4, height: 4)
             }
         }
-        .help(prefs.labelMode == .tooltip ? label : "")
+        .nativeToolTip(prefs.labelMode == .tooltip ? label : "")
         .coordinateSpace(name: "item-\(item.id)")
         .gesture(
             DragGesture(coordinateSpace: .named("dock"))
