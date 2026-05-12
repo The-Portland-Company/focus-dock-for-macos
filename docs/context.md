@@ -77,7 +77,12 @@ focus-dock-for-macos/
   - `right` → `x = area.maxX - thickness`, square top-right + bottom-right
 - Uses `screen.frame` (full extent) instead of `screen.visibleFrame` so the dock can sit against the absolute edge.
 - Corner squaring is implemented via `UnevenRoundedRectangle` (`dockShape` computed property).
-- The "dock has a gap below screen edge when flush" bug was `NSHostingController` applying SwiftUI safe-area insets to our borderless `NSPanel`. Fix: `.ignoresSafeArea()` on the `DockView` root.
+- The "dock has a gap below screen edge when flush" bug has reappeared three times historically (commits `401f62d`, `827a29e`, `634bb50`). Root cause is SwiftUI/`NSHostingController` introducing safe-area insets on the borderless `NSPanel`, and ZStack-based edge anchoring is fragile against any sub-pixel rounding the system layer adds. The current defense is **belt-and-suspenders**:
+  1. `.ignoresSafeArea()` on the `DockView` root.
+  2. ZStack uses `alignment: dockAlignment` so the resting-thickness chrome pins to the configured edge.
+  3. `DockHostingController` — a thin `NSHostingController` subclass — negates `view.safeAreaInsets` by setting `additionalSafeAreaInsets` to their negative on every `viewDidLayout`, hard-zeroing the host's safe area at the AppKit level.
+  4. **Edge bleed**: when flush, the window frame is extended 3 pt past the screen edge in the perpendicular axis. The chrome stays anchored to the edge inside the larger window, so those 3 pt sit off-screen and any residual SwiftUI inset is swallowed by the bleed. The bleed is invisible (off-screen) so it has no cosmetic cost.
+  Do not regress any of these four — removing any single one could re-open the bug under a future macOS / SwiftUI build.
 
 ### Padding (inside the dock)
 - Four sliders for Top / Bottom / Left / Right *internal* padding (between dock border and icons).
