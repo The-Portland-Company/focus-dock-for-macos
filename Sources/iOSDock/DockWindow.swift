@@ -67,23 +67,23 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         case .bottom:
             let desired = totalIcons + pl + pr
             let maxLen = area.width - screenBuffer
-            let length = min(max(desired, 240), maxLen)
+            let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let y = useFlush ? area.minY : area.minY + offset
             frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal)
         case .top:
             let desired = totalIcons + pl + pr
             let maxLen = area.width - screenBuffer
-            let length = min(max(desired, 240), maxLen)
+            let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             frame = NSRect(x: area.midX - length / 2, y: area.maxY - thicknessHorizontal - offset, width: length, height: thicknessHorizontal)
         case .left:
             let desired = totalIcons + pt + pb
             let maxLen = area.height - screenBuffer
-            let length = min(max(desired, 240), maxLen)
+            let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             frame = NSRect(x: area.minX + offset, y: area.midY - length / 2, width: thicknessVertical, height: length)
         case .right:
             let desired = totalIcons + pt + pb
             let maxLen = area.height - screenBuffer
-            let length = min(max(desired, 240), maxLen)
+            let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             frame = NSRect(x: area.maxX - thicknessVertical - offset, y: area.midY - length / 2, width: thicknessVertical, height: length)
         }
         win.setFrame(frame, display: true, animate: false)
@@ -157,11 +157,17 @@ struct DockView: View {
         iconSize + CGFloat(isVertical ? prefs.paddingLeft + prefs.paddingRight : prefs.paddingTop + prefs.paddingBottom) + 8
     }
 
+    // Stable UUID for the virtual Finder entry so SwiftUI doesn't churn the
+    // view identity on every render (which was causing the hover-jump).
+    private static let finderID = UUID(uuidString: "F1ND3R00-0000-0000-0000-000000000001")!
+    private static let finderEntry = AppEntry(id: finderID,
+                                              path: "/System/Library/CoreServices/Finder.app",
+                                              name: "Finder")
+
     /// All items rendered in the dock, optionally prepended by a virtual Finder item.
     private var renderedItems: [DockItem] {
         guard prefs.showFinder else { return library.items }
-        let finder = AppEntry(path: "/System/Library/CoreServices/Finder.app", name: "Finder")
-        return [.app(finder)] + library.items
+        return [.app(Self.finderEntry)] + library.items
     }
 
     /// Effective per-icon scale to fit content within the dock window length.
@@ -210,7 +216,12 @@ struct DockView: View {
             let avail = isVertical ? proxy.size.height : proxy.size.width
             let scale = effectiveScale(in: avail)
             let scaledIcon = iconSize * scale
-            let scaledSpacing = spacing * scale
+            // When "Fill width" is on, compute spacing automatically so the icons
+            // are evenly distributed across the available interior width.
+            let interior = max(0, avail - CGFloat(isVertical ? prefs.paddingTop + prefs.paddingBottom : prefs.paddingLeft + prefs.paddingRight))
+            let n = max(1, renderedItems.count)
+            let autoSpacing: CGFloat = n > 1 ? max(0, (interior - CGFloat(n) * scaledIcon) / CGFloat(n - 1)) : 0
+            let scaledSpacing = prefs.fillWidth ? autoSpacing : spacing * scale
 
             ZStack(alignment: dockAlignment) {
                 dockChrome
@@ -222,12 +233,16 @@ struct DockView: View {
                 Group {
                     if isVertical {
                         VStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
-                            .padding(.vertical, CGFloat(prefs.paddingTop))
-                            .padding(.horizontal, CGFloat(prefs.paddingLeft))
+                            .padding(.top, CGFloat(prefs.paddingTop))
+                            .padding(.bottom, CGFloat(prefs.paddingBottom))
+                            .padding(.leading, CGFloat(prefs.paddingLeft))
+                            .padding(.trailing, CGFloat(prefs.paddingRight))
                     } else {
                         HStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
-                            .padding(.horizontal, CGFloat(prefs.paddingLeft))
-                            .padding(.vertical, CGFloat(prefs.paddingTop))
+                            .padding(.top, CGFloat(prefs.paddingTop))
+                            .padding(.bottom, CGFloat(prefs.paddingBottom))
+                            .padding(.leading, CGFloat(prefs.paddingLeft))
+                            .padding(.trailing, CGFloat(prefs.paddingRight))
                     }
                 }
             }

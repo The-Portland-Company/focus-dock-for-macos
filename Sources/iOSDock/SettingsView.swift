@@ -35,7 +35,8 @@ struct SettingsView: View {
             }
             .padding()
         }
-        .frame(width: 540, height: 520)
+        .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity,
+               minHeight: 420, idealHeight: 560, maxHeight: .infinity)
         .onAppear {
             UserDefaults.standard.set(true, forKey: "hasSeenSettings")
         }
@@ -305,17 +306,25 @@ struct SettingsView: View {
                             get: { prefs.iconSize },
                             set: { prefs.iconSize = $0 }
                         ), in: 32...128, step: 1)
-                        Text("\(Int(prefs.iconSize)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                        EditableNumber(value: Binding(get: { prefs.iconSize }, set: { prefs.iconSize = $0 }), suffix: "pt")
                     }
                 }
-                settingRow(.spacing) {
-                    HStack {
-                        Text("Spacing")
-                        Slider(value: Binding(
-                            get: { prefs.spacing },
-                            set: { prefs.spacing = $0 }
-                        ), in: 0...40, step: 1)
-                        Text("\(Int(prefs.spacing)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                settingRow(.fillWidth) {
+                    Toggle("Fill width (auto-space icons across dock)", isOn: Binding(
+                        get: { prefs.fillWidth },
+                        set: { prefs.fillWidth = $0 }
+                    ))
+                }
+                if !prefs.fillWidth {
+                    settingRow(.spacing) {
+                        HStack {
+                            Text("Spacing")
+                            Slider(value: Binding(
+                                get: { prefs.spacing },
+                                set: { prefs.spacing = $0 }
+                            ), in: 0...40, step: 1)
+                            EditableNumber(value: Binding(get: { prefs.spacing }, set: { prefs.spacing = $0 }), suffix: "pt")
+                        }
                     }
                 }
                 settingRow(.labelMode) {
@@ -342,16 +351,39 @@ struct SettingsView: View {
                                 get: { prefs.magnifySize },
                                 set: { prefs.magnifySize = $0 }
                             ), in: max(prefs.iconSize, 48)...192, step: 1)
-                            Text("\(Int(prefs.magnifySize)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                            EditableNumber(value: Binding(get: { prefs.magnifySize }, set: { prefs.magnifySize = $0 }), suffix: "pt")
                         }
                     }
                 }
             }
             Section("Padding (inside dock)") {
-                settingRow(.marginTop) { marginSlider("Top", value: Binding(get: { prefs.paddingTop }, set: { prefs.paddingTop = $0 })) }
-                settingRow(.marginBottom) { marginSlider("Bottom", value: Binding(get: { prefs.paddingBottom }, set: { prefs.paddingBottom = $0 })) }
-                settingRow(.marginLeft) { marginSlider("Left", value: Binding(get: { prefs.paddingLeft }, set: { prefs.paddingLeft = $0 })) }
-                settingRow(.marginRight) { marginSlider("Right", value: Binding(get: { prefs.paddingRight }, set: { prefs.paddingRight = $0 })) }
+                settingRow(.paddingUniform) {
+                    Toggle("All (apply one value to top, bottom, left, right)", isOn: Binding(
+                        get: { prefs.paddingUniform },
+                        set: { newVal in
+                            prefs.paddingUniform = newVal
+                            if newVal {
+                                let v = prefs.paddingTop
+                                prefs.paddingBottom = v; prefs.paddingLeft = v; prefs.paddingRight = v
+                            }
+                        }
+                    ))
+                }
+                if prefs.paddingUniform {
+                    settingRow(.marginTop) {
+                        marginSlider("All", value: Binding(
+                            get: { prefs.paddingTop },
+                            set: { v in
+                                prefs.paddingTop = v; prefs.paddingBottom = v; prefs.paddingLeft = v; prefs.paddingRight = v
+                            }
+                        ))
+                    }
+                } else {
+                    settingRow(.marginTop) { marginSlider("Top", value: Binding(get: { prefs.paddingTop }, set: { prefs.paddingTop = $0 })) }
+                    settingRow(.marginBottom) { marginSlider("Bottom", value: Binding(get: { prefs.paddingBottom }, set: { prefs.paddingBottom = $0 })) }
+                    settingRow(.marginLeft) { marginSlider("Left", value: Binding(get: { prefs.paddingLeft }, set: { prefs.paddingLeft = $0 })) }
+                    settingRow(.marginRight) { marginSlider("Right", value: Binding(get: { prefs.paddingRight }, set: { prefs.paddingRight = $0 })) }
+                }
             }
             Section("Dock Background") {
                 settingRow(.tintBackground) {
@@ -362,14 +394,13 @@ struct SettingsView: View {
                 }
                 if prefs.tintBackground {
                     settingRow(.backgroundColor) {
-                        ColorPicker("Background color & opacity",
-                                    selection: rgbaBinding(\.backgroundColor),
-                                    supportsOpacity: true)
+                        HStack {
+                            ColorPicker("Background color & opacity",
+                                        selection: rgbaBinding(\.backgroundColor),
+                                        supportsOpacity: true)
+                            colorPreviewSwatch(prefs.backgroundColor)
+                        }
                     }
-                }
-                HStack {
-                    Spacer()
-                    Button("Use macOS Native Default") { prefs.resetBackgroundToNative() }
                 }
             }
             Section("Dock Border") {
@@ -381,9 +412,12 @@ struct SettingsView: View {
                 }
                 if prefs.showBorder {
                     settingRow(.borderColor) {
-                        ColorPicker("Border color & opacity",
-                                    selection: rgbaBinding(\.borderColor),
-                                    supportsOpacity: true)
+                        HStack {
+                            ColorPicker("Border color & opacity",
+                                        selection: rgbaBinding(\.borderColor),
+                                        supportsOpacity: true)
+                            colorPreviewSwatch(prefs.borderColor)
+                        }
                     }
                     settingRow(.borderWidth) {
                         HStack {
@@ -392,13 +426,12 @@ struct SettingsView: View {
                                 get: { prefs.borderWidth },
                                 set: { prefs.borderWidth = $0 }
                             ), in: 0...6, step: 0.5)
-                            Text(String(format: "%.1f pt", prefs.borderWidth)).monospacedDigit().frame(width: 56, alignment: .trailing)
+                            EditableNumber(value: Binding(
+                                get: { prefs.borderWidth },
+                                set: { prefs.borderWidth = $0 }
+                            ), suffix: "pt", precision: 1)
                         }
                     }
-                }
-                HStack {
-                    Spacer()
-                    Button("Use macOS Native Default") { prefs.resetBorderToNative() }
                 }
             }
             Section("Shape") {
@@ -417,7 +450,7 @@ struct SettingsView: View {
                             get: { prefs.cornerRadius },
                             set: { prefs.cornerRadius = $0 }
                         ), in: 0...40, step: 1)
-                        Text("\(Int(prefs.cornerRadius)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                        EditableNumber(value: Binding(get: { prefs.cornerRadius }, set: { prefs.cornerRadius = $0 }), suffix: "pt")
                     }
                 }
             }
@@ -440,7 +473,7 @@ struct SettingsView: View {
                             get: { prefs.edgeOffset },
                             set: { prefs.edgeOffset = $0 }
                         ), in: 0...80, step: 1)
-                        Text("\(Int(prefs.edgeOffset)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                        EditableNumber(value: Binding(get: { prefs.edgeOffset }, set: { prefs.edgeOffset = $0 }), suffix: "pt")
                     }
                 }
                 settingRow(.showFinder) {
@@ -588,11 +621,76 @@ struct SettingsView: View {
         HStack {
             Text(label).frame(width: 70, alignment: .leading)
             Slider(value: value, in: 0...80, step: 1)
-            Text("\(Int(value.wrappedValue)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+            EditableNumber(value: value, suffix: "pt")
         }
     }
 
-    private func cloneFromSystemDock() {
+    private func colorPreviewSwatch(_ rgba: Preferences.RGBA) -> some View {
+        // Visualizes the chosen hue regardless of alpha, then overlays the
+        // actual color (with alpha) so users see both.
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Color(.sRGB, red: rgba.r, green: rgba.g, blue: rgba.b, opacity: 1))
+            .frame(width: 22, height: 22)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.2), lineWidth: 0.5)
+            )
+            .help("Selected hue (ignoring opacity)")
+    }
+}
+
+/// Click-to-edit numeric display. Reads from a Double binding, shows as text,
+/// switches to a small `TextField` on click, commits on Return / focus loss.
+struct EditableNumber: View {
+    @Binding var value: Double
+    var suffix: String = ""
+    var precision: Int = 0
+    @State private var editing = false
+    @State private var draft = ""
+    @FocusState private var focused: Bool
+
+    var body: some View {
+        Group {
+            if editing {
+                TextField("", text: $draft, onCommit: commit)
+                    .focused($focused)
+                    .textFieldStyle(.roundedBorder)
+                    .frame(width: 70)
+                    .onAppear {
+                        draft = format(value)
+                        DispatchQueue.main.async { focused = true }
+                    }
+                    .onChange(of: focused) { newValue in if !newValue { commit() } }
+            } else {
+                Text(format(value) + (suffix.isEmpty ? "" : " \(suffix)"))
+                    .monospacedDigit()
+                    .frame(width: 70, alignment: .trailing)
+                    .contentShape(Rectangle())
+                    .onTapGesture {
+                        draft = format(value)
+                        editing = true
+                    }
+                    .help("Click to edit")
+            }
+        }
+    }
+
+    private func format(_ v: Double) -> String {
+        precision == 0 ? "\(Int(v))" : String(format: "%.\(precision)f", v)
+    }
+
+    private func commit() {
+        if let v = Double(draft.replacingOccurrences(of: " \(suffix)", with: "").trimmingCharacters(in: .whitespaces)) {
+            value = v
+        }
+        editing = false
+    }
+}
+
+// MARK: - SettingsView helpers continued (moved below to keep struct compile)
+
+extension SettingsView {
+    fileprivate func cloneFromSystemDock() {
         let paths = SystemDockManager.readSystemDockApps()
         guard !paths.isEmpty else {
             let a = NSAlert()
@@ -608,7 +706,7 @@ struct SettingsView: View {
         }
     }
 
-    private func addApp() {
+    fileprivate func addApp() {
         let panel = NSOpenPanel()
         panel.allowedContentTypes = [UTType.application]
         panel.directoryURL = URL(fileURLWithPath: "/Applications")
