@@ -65,6 +65,9 @@ struct SettingsView: View {
                 restoreBadge
                     .padding(.top, 6)
 
+                githubBadge
+                    .padding(.top, 4)
+
                 DisclosureGroup("Installed files & permissions") {
                     VStack(alignment: .leading, spacing: 14) {
                         Text("Installed files").font(.subheadline).bold()
@@ -109,6 +112,44 @@ struct SettingsView: View {
                 .overlay(
                     RoundedRectangle(cornerRadius: 10, style: .continuous)
                         .strokeBorder(Color.green.opacity(0.35), lineWidth: 0.5)
+                )
+        )
+    }
+
+    private var githubBadge: some View {
+        let repoURL = URL(string: "https://github.com/The-Portland-Company/focus-dock-for-macos")!
+        let issuesURL = URL(string: "https://github.com/The-Portland-Company/focus-dock-for-macos/issues/new")!
+        return HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "chevron.left.forwardslash.chevron.right")
+                .foregroundStyle(.white)
+                .padding(8)
+                .background(Color.purple.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            VStack(alignment: .leading, spacing: 4) {
+                Text("Open source — help shape Focus: Dock.").font(.callout).bold()
+                Text("Found a bug? Want a feature? Submit an issue or open a pull request on GitHub — contributions are welcome.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                HStack(spacing: 12) {
+                    Link(destination: repoURL) {
+                        Label("View on GitHub", systemImage: "arrow.up.right.square")
+                            .font(.caption.weight(.semibold))
+                    }
+                    Link(destination: issuesURL) {
+                        Label("Submit an issue", systemImage: "exclamationmark.bubble")
+                            .font(.caption.weight(.semibold))
+                    }
+                }
+                .padding(.top, 2)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.purple.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.purple.opacity(0.35), lineWidth: 0.5)
                 )
         )
     }
