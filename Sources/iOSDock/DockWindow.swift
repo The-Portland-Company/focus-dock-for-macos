@@ -234,6 +234,7 @@ struct DockView: View {
             .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .padding(prefs.flushBottom && prefs.edge == .bottom ? 0 : 8)
+        .ignoresSafeArea()
         .coordinateSpace(name: "dock")
         .onContinuousHover(coordinateSpace: .named("dock")) { phase in
             switch phase {
@@ -389,6 +390,12 @@ struct DockItemView: View {
             if prefs.labelMode == .below {
                 labelText
             }
+            // Running-app indicator dot (when enabled).
+            if prefs.showRunningIndicators, isAppRunning {
+                Circle()
+                    .fill(Color.primary.opacity(0.6))
+                    .frame(width: 4, height: 4)
+            }
         }
         .help(prefs.labelMode == .tooltip ? label : "")
         .coordinateSpace(name: "item-\(item.id)")
@@ -421,6 +428,7 @@ struct DockItemView: View {
             if case .folder(let f) = item {
                 FolderPopover(folder: f)
                     .environmentObject(library)
+                    .environmentObject(prefs)
             }
         }
     }
@@ -434,6 +442,15 @@ struct DockItemView: View {
                 .frame(width: iconSize, height: iconSize)
         case .folder(let f):
             FolderIconView(folder: f, size: iconSize)
+        }
+    }
+
+    private var isAppRunning: Bool {
+        guard case .app(let a) = item else { return false }
+        let url = URL(fileURLWithPath: a.path).resolvingSymlinksInPath()
+        return NSWorkspace.shared.runningApplications.contains { app in
+            guard let bundleURL = app.bundleURL?.resolvingSymlinksInPath() else { return false }
+            return bundleURL == url
         }
     }
 
@@ -609,23 +626,83 @@ struct FolderIconView: View {
 struct FolderPopover: View {
     let folder: FolderEntry
     @EnvironmentObject var library: AppLibrary
+    @EnvironmentObject var prefs: Preferences
+    @State private var editingName: Bool = false
+    @State private var draftName: String = ""
+
+    private var resolvedColumns: Int {
+        if let c = folder.columns, c > 0 { return c }
+        // Auto: roughly square-ish, capped at 5.
+        let n = max(1, folder.apps.count)
+        return min(5, max(1, Int(ceil(Double(n).squareRoot()))))
+    }
+
+    private let cellSize: CGFloat = 56
+    private let cellSpacing: CGFloat = 14
 
     var body: some View {
+        let cols = Array(repeating: GridItem(.fixed(cellSize + 16), spacing: cellSpacing), count: resolvedColumns)
+
         VStack(alignment: .leading, spacing: 10) {
-            Text(folder.name).font(.headline)
-            let cols = Array(repeating: GridItem(.fixed(64), spacing: 12), count: 4)
-            LazyVGrid(columns: cols, spacing: 14) {
+            header
+            LazyVGrid(columns: cols, alignment: .leading, spacing: cellSpacing) {
                 ForEach(folder.apps) { app in
-                    VStack {
-                        Image(nsImage: app.icon).resizable().frame(width: 48, height: 48)
-                        Text(app.name).font(.system(size: 10)).lineLimit(1)
-                    }
-                    .onTapGesture { library.launch(app) }
+                    folderAppCell(app)
                 }
             }
         }
         .padding(16)
-        .frame(width: 340)
+        .frame(width: CGFloat(resolvedColumns) * (cellSize + 16) + CGFloat(max(0, resolvedColumns - 1)) * cellSpacing + 32)
+    }
+
+    private var header: some View {
+        HStack(spacing: 8) {
+            if editingName {
+                TextField("Folder name", text: $draftName, onCommit: {
+                    library.renameFolder(folder.id, to: draftName.trimmingCharacters(in: .whitespaces).isEmpty ? folder.name : draftName)
+                    editingName = false
+                })
+                .textFieldStyle(.roundedBorder)
+                .font(.headline)
+            } else {
+                Text(folder.name)
+                    .font(.headline)
+                    .onTapGesture(count: 2) {
+                        draftName = folder.name
+                        editingName = true
+                    }
+                    .help("Double-click to rename")
+            }
+            Spacer()
+            Button {
+                NotificationCenter.default.post(name: SettingsRouter.openFolder, object: folder.id)
+            } label: { Image(systemName: "gearshape") }
+                .buttonStyle(.borderless)
+                .help("Folder settings")
+        }
+    }
+
+    @ViewBuilder
+    private func folderAppCell(_ app: AppEntry) -> some View {
+        VStack(spacing: 4) {
+            if prefs.labelMode == .above {
+                cellLabel(app)
+            }
+            Image(nsImage: app.icon).resizable().interpolation(.high)
+                .frame(width: cellSize, height: cellSize)
+                .nativeToolTip(prefs.labelMode == .tooltip ? app.name : "")
+            if prefs.labelMode == .below {
+                cellLabel(app)
+            }
+        }
+        .frame(width: cellSize + 16)
+        .contentShape(Rectangle())
+        .onTapGesture { library.launch(app) }
+    }
+
+    private func cellLabel(_ app: AppEntry) -> some View {
+        Text(app.name).font(.system(size: 10)).lineLimit(1)
+            .frame(maxWidth: cellSize + 16)
     }
 }
 

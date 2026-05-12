@@ -28,6 +28,10 @@ final class Preferences: ObservableObject {
     private let kBorderWidth = "borderWidth"
     private let kEdgeOffset = "edgeOffset"
     private let kShowFinder = "showFinder"
+    private let kAutoHide = "autoHideDock"
+    private let kBounce = "bounceOnLaunch"
+    private let kRunningDots = "showRunningIndicators"
+    private let kShowRecents = "showRecentApps"
 
     init() {
         if defaults.object(forKey: kDockIcon) == nil { defaults.set(true, forKey: kDockIcon) }
@@ -51,6 +55,10 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: kBorderWidth) == nil { defaults.set(0.5, forKey: kBorderWidth) }
         if defaults.object(forKey: kEdgeOffset) == nil { defaults.set(8.0, forKey: kEdgeOffset) }
         if defaults.object(forKey: kShowFinder) == nil { defaults.set(true, forKey: kShowFinder) }
+        if defaults.object(forKey: kAutoHide) == nil { defaults.set(false, forKey: kAutoHide) }
+        if defaults.object(forKey: kBounce) == nil { defaults.set(true, forKey: kBounce) }
+        if defaults.object(forKey: kRunningDots) == nil { defaults.set(true, forKey: kRunningDots) }
+        if defaults.object(forKey: kShowRecents) == nil { defaults.set(false, forKey: kShowRecents) }
         // Migrate older "margin" defaults to padding-appropriate values on first
         // launch with this build only.
         if !defaults.bool(forKey: "didMigratePadding") {
@@ -90,7 +98,8 @@ final class Preferences: ObservableObject {
              marginTop, marginBottom, marginLeft, marginRight,
              flushBottom, cornerRadius,
              tintBackground, backgroundColor, showBorder, borderColor, borderWidth,
-             edgeOffset, showFinder
+             edgeOffset, showFinder,
+             autoHideDock, bounceOnLaunch, showRunningIndicators, showRecentApps
     }
 
     /// Plain-Any defaults for primitives; the RGBA ones are handled specially in `reset(_:)`.
@@ -102,7 +111,8 @@ final class Preferences: ObservableObject {
         .marginTop: 14.0, .marginBottom: 14.0, .marginLeft: 18.0, .marginRight: 18.0,
         .flushBottom: false, .cornerRadius: 24.0,
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
-        .edgeOffset: 8.0, .showFinder: true
+        .edgeOffset: 8.0, .showFinder: true,
+        .autoHideDock: false, .bounceOnLaunch: true, .showRunningIndicators: true, .showRecentApps: false
     ]
 
     func reset(_ key: Key) {
@@ -136,6 +146,22 @@ final class Preferences: ObservableObject {
     var showFinder: Bool {
         get { defaults.bool(forKey: kShowFinder) }
         set { defaults.set(newValue, forKey: kShowFinder); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+    var autoHideDock: Bool {
+        get { defaults.bool(forKey: kAutoHide) }
+        set { defaults.set(newValue, forKey: kAutoHide); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+    var bounceOnLaunch: Bool {
+        get { defaults.bool(forKey: kBounce) }
+        set { defaults.set(newValue, forKey: kBounce); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+    var showRunningIndicators: Bool {
+        get { defaults.bool(forKey: kRunningDots) }
+        set { defaults.set(newValue, forKey: kRunningDots); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+    var showRecentApps: Bool {
+        get { defaults.bool(forKey: kShowRecents) }
+        set { defaults.set(newValue, forKey: kShowRecents); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
     }
 
     // Padding (semantic renames over marginTop/etc — internal dock padding around icons)

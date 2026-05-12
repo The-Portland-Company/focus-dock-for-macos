@@ -33,6 +33,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // Offer to hide system Dock (so this dock can take over).
         promptHideSystemDockIfNeeded()
 
+        // Deep-link from folder popover → open Settings.
+        NotificationCenter.default.addObserver(
+            forName: SettingsRouter.openFolder, object: nil, queue: .main
+        ) { [weak self] _ in self?.openSettings() }
+
         prefsObserver = NotificationCenter.default.addObserver(
             forName: Preferences.changed, object: nil, queue: .main
         ) { [weak self] _ in

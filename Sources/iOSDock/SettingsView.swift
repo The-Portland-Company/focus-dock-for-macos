@@ -39,7 +39,15 @@ struct SettingsView: View {
         .onAppear {
             UserDefaults.standard.set(true, forKey: "hasSeenSettings")
         }
+        .onReceive(NotificationCenter.default.publisher(for: SettingsRouter.openFolder)) { notif in
+            selection = .apps
+            if let id = notif.object as? UUID {
+                pendingFolder = id
+            }
+        }
     }
+
+    @State private var pendingFolder: UUID? = nil
 
     private var systemSettingsLink: some View {
         Button {
@@ -448,6 +456,32 @@ struct SettingsView: View {
                 Text("Left, right, and top placement are available while Edit Layout is on. Bottom is the default to match the system Dock.")
                     .font(.caption).foregroundStyle(.secondary)
             }
+            Section("Behavior (macOS Dock parity)") {
+                settingRow(.autoHideDock) {
+                    Toggle("Automatically hide and show the dock", isOn: Binding(
+                        get: { prefs.autoHideDock },
+                        set: { prefs.autoHideDock = $0 }
+                    ))
+                }
+                settingRow(.bounceOnLaunch) {
+                    Toggle("Animate opening applications (bounce)", isOn: Binding(
+                        get: { prefs.bounceOnLaunch },
+                        set: { prefs.bounceOnLaunch = $0 }
+                    ))
+                }
+                settingRow(.showRunningIndicators) {
+                    Toggle("Show indicators for open applications", isOn: Binding(
+                        get: { prefs.showRunningIndicators },
+                        set: { prefs.showRunningIndicators = $0 }
+                    ))
+                }
+                settingRow(.showRecentApps) {
+                    Toggle("Show recent apps in dock", isOn: Binding(
+                        get: { prefs.showRecentApps },
+                        set: { prefs.showRecentApps = $0 }
+                    ))
+                }
+            }
             Section("System Dock") {
                 Toggle("Hide system Dock while this app is running", isOn: Binding(
                     get: { dockHidden },
@@ -525,7 +559,7 @@ struct SettingsView: View {
             }
             Text("Drag any app to drop it into a folder, or onto the bottom row to move it back to the top level.")
                 .font(.caption).foregroundStyle(.secondary)
-            FolderTreeView()
+            FolderTreeView(pendingFolderID: $pendingFolder)
                 .environmentObject(library)
         }
         .padding(.bottom, 8)
@@ -594,6 +628,7 @@ private let appDragType = "com.spencerhill.MacOSDockFolders.app-id"
 
 struct FolderTreeView: View {
     @EnvironmentObject var library: AppLibrary
+    @Binding var pendingFolderID: UUID?
     @State private var expandedFolders: Set<UUID> = []
     @State private var dropTargetFolder: UUID? = nil
     @State private var topLevelDropHover: Bool = false
@@ -617,6 +652,15 @@ struct FolderTreeView: View {
         .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
         .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
         .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
+        .onChange(of: pendingFolderID) { id in
+            if let id = id {
+                expandedFolders.insert(id)
+                // Clear after focusing.
+                DispatchQueue.main.asyncAfter(deadline: .now() + 0.2) {
+                    pendingFolderID = nil
+                }
+            }
+        }
     }
 
     // MARK: rows
@@ -680,6 +724,22 @@ struct FolderTreeView: View {
 
             if expanded {
                 VStack(alignment: .leading, spacing: 2) {
+                    // Per-folder settings: column count.
+                    HStack(spacing: 8) {
+                        Text("Columns").font(.caption).foregroundStyle(.secondary)
+                        Picker("", selection: Binding(
+                            get: { folder.columns ?? 0 },
+                            set: { library.setFolderColumns(folder.id, columns: $0 == 0 ? nil : $0) }
+                        )) {
+                            Text("Auto").tag(0)
+                            ForEach(1...6, id: \.self) { Text("\($0)").tag($0) }
+                        }
+                        .frame(width: 110)
+                        .labelsHidden()
+                        Spacer()
+                    }
+                    .padding(.leading, 36).padding(.trailing, 6).padding(.vertical, 3)
+
                     if folder.apps.isEmpty {
                         Text("Empty folder").font(.caption).foregroundStyle(.secondary)
                             .padding(.leading, 36)

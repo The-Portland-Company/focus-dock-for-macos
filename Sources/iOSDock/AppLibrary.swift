@@ -48,6 +48,13 @@ struct FolderEntry: Identifiable, Equatable, Codable {
     var id = UUID()
     var name: String
     var apps: [AppEntry]
+    var columns: Int? = nil
+}
+
+/// Used to deep-link from a dock folder popover into Settings → Apps with that
+/// folder selected/expanded.
+enum SettingsRouter {
+    static let openFolder = Notification.Name("FocusDock.OpenFolderInSettings")
 }
 
 final class AppLibrary: ObservableObject {
@@ -219,6 +226,12 @@ final class AppLibrary: ObservableObject {
     func renameFolder(_ folderID: UUID, to name: String) {
         guard let i = items.firstIndex(where: { $0.id == folderID }), case .folder(var f) = items[i] else { return }
         f.name = name
+        items[i] = .folder(f)
+    }
+
+    func setFolderColumns(_ folderID: UUID, columns: Int?) {
+        guard let i = items.firstIndex(where: { $0.id == folderID }), case .folder(var f) = items[i] else { return }
+        f.columns = columns
         items[i] = .folder(f)
     }
 
