@@ -1,6 +1,33 @@
 import SwiftUI
 import AppKit
 
+/// Hosting controller that hard-zeros every safe-area inset path SwiftUI may
+/// otherwise apply to a borderless `NSPanel`. The Flush-with-Edge bug kept
+/// reappearing because SwiftUI was insetting the root view by a few points
+/// for safe areas it inferred from the host window — leaving a visible gap
+/// between the dock chrome and the screen edge. `.ignoresSafeArea()` inside
+/// the SwiftUI tree is not always sufficient, so we belt-and-suspender it at
+/// the AppKit level too.
+final class DockHostingController<Content: View>: NSHostingController<Content> {
+    override func viewWillAppear() {
+        super.viewWillAppear()
+        zeroSafeArea()
+    }
+    override func viewDidLayout() {
+        super.viewDidLayout()
+        zeroSafeArea()
+    }
+    private func zeroSafeArea() {
+        // Negate any safe-area insets the system tries to introduce on the
+        // hosting view. Setting additionalSafeAreaInsets to the negative of
+        // the current safeAreaInsets nets to zero.
+        let s = view.safeAreaInsets
+        view.additionalSafeAreaInsets = NSEdgeInsets(
+            top: -s.top, left: -s.left, bottom: -s.bottom, right: -s.right
+        )
+    }
+}
+
 final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var prefsObserver: NSObjectProtocol?
     private var snapWorkItem: DispatchWorkItem?
@@ -9,7 +36,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let content = DockView()
             .environmentObject(AppLibrary.shared)
             .environmentObject(Preferences.shared)
-        let host = NSHostingController(rootView: content)
+        let host = DockHostingController(rootView: content)
 
         let win = NSPanel(
             contentRect: NSRect(x: 0, y: 0, width: 800, height: 130),
@@ -77,32 +104,40 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         _ = perpInside // silence unused warning if not referenced below
 
         let screenBuffer: CGFloat = 16
+        // Flush "bleed": when flush-with-edge is on we extend the window a few
+        // points past the screen edge in the perpendicular axis so the dock
+        // chrome (which is anchored to that edge via the SwiftUI ZStack) covers
+        // the edge unconditionally. This is the bulletproof half of the
+        // belt-and-suspender — even if SwiftUI silently insets a pixel for
+        // safe-area or rounding reasons, the bleed swallows it. The bleed is
+        // off-screen, so it has no visible cost.
+        let bleed: CGFloat = useFlush ? 3 : 0
         let frame: NSRect
         switch edge {
         case .bottom:
             let desired = totalIcons + pl + pr
             let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
-            let y = useFlush ? area.minY : area.minY + offset
-            frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal)
+            let y = useFlush ? area.minY - bleed : area.minY + offset
+            frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal + bleed)
         case .top:
             let desired = totalIcons + pl + pr
             let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let y = useFlush ? area.maxY - thicknessHorizontal : area.maxY - thicknessHorizontal - offset
-            frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal)
+            frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal + bleed)
         case .left:
             let desired = totalIcons + pt + pb
             let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
-            let x = useFlush ? area.minX : area.minX + offset
-            frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical, height: length)
+            let x = useFlush ? area.minX - bleed : area.minX + offset
+            frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical + bleed, height: length)
         case .right:
             let desired = totalIcons + pt + pb
             let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let x = useFlush ? area.maxX - thicknessVertical : area.maxX - thicknessVertical - offset
-            frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical, height: length)
+            frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical + bleed, height: length)
         }
         win.setFrame(frame, display: true, animate: false)
     }
