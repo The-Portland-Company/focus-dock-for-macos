@@ -37,8 +37,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItemIfNeeded()
         installDockIcon()
 
+        // If a previous run was force-quit while the Dock was hidden, restore
+        // originals first so we don't lose them when we re-hide below.
+        SystemDockManager.selfHealIfStaleHide()
+
+        // Install crash/force-quit backstop BEFORE hiding the Dock so abnormal
+        // exits (SIGTERM, SIGINT, atexit) still restore the system Dock.
+        QuitBackstop.install()
+
         // Offer to hide system Dock (so this dock can take over).
         SystemDockManager.hideSystemDock()
+
+        // Start polling the system Dock's AX tree for numeric badges and
+        // attention requests. Prompts once for Accessibility permission;
+        // silently no-ops until granted.
+        BadgeMonitor.shared.start()
 
         // Deep-link from folder popover → open Settings.
         NotificationCenter.default.addObserver(
@@ -143,7 +156,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         dockWindow?.window?.orderFrontRegardless()
     }
 
+    func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
+        // Restore synchronously on the normal quit path so the Dock comes back
+        // before the run loop exits. (applicationWillTerminate is sometimes too late.)
+        if SystemDockManager.isHidden {
+            SystemDockManager.restoreSystemDock()
+        }
+        return .terminateNow
+    }
+
     func applicationWillTerminate(_ notification: Notification) {
+        // Belt-and-suspenders: if applicationShouldTerminate didn't run (e.g.
+        // logout-driven terminate), restore here too. restoreSystemDock is
+        // idempotent — calling twice is harmless.
         if SystemDockManager.isHidden {
             SystemDockManager.restoreSystemDock()
         }
