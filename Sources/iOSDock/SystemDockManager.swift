@@ -49,10 +49,24 @@ enum SystemDockManager {
 
     /// Capture the user's pre-hide values exactly once. Subsequent calls are no-ops.
     /// Guards against the "we hid the Dock, then on next launch re-read our own hide
-    /// values as originals" bug.
+    /// values as originals" bug. If the live values already match our hide-state
+    /// fingerprint (autohide=true + autohide-delay≈1000 + autohide-time-modifier=0),
+    /// the snapshot is treated as clean-default — restoring will delete those keys
+    /// and the OS falls back to native defaults.
     private static func snapshotOriginalsIfNeeded() {
         let d = UserDefaults.standard
         if d.bool(forKey: kSnapshotTaken) { return }
+        if liveValuesMatchHideFingerprint() {
+            // Upgrade path: a pre-fix build already hid the Dock and our originals
+            // are gone. Record "no prior values" so restore() deletes the keys.
+            for key in savedKeys {
+                d.set(false, forKey: "savedDock.\(key).present")
+                d.removeObject(forKey: "savedDock.\(key)")
+            }
+            d.set(true, forKey: kSnapshotTaken)
+            d.synchronize()
+            return
+        }
         for key in savedKeys {
             let value = CFPreferencesCopyAppValue(key as CFString, dockDomain)
             if let v = value {
@@ -65,6 +79,15 @@ enum SystemDockManager {
         }
         d.set(true, forKey: kSnapshotTaken)
         d.synchronize()
+    }
+
+    /// True iff the current com.apple.dock values look like values WE wrote in
+    /// `hideSystemDock()`. Used to detect upgrade-from-pre-fix-build pollution.
+    private static func liveValuesMatchHideFingerprint() -> Bool {
+        let autohide = CFPreferencesCopyAppValue("autohide" as CFString, dockDomain) as? Bool ?? false
+        let delay = (CFPreferencesCopyAppValue("autohide-delay" as CFString, dockDomain) as? NSNumber)?.doubleValue ?? 0
+        let timeMod = (CFPreferencesCopyAppValue("autohide-time-modifier" as CFString, dockDomain) as? NSNumber)?.doubleValue ?? -1
+        return autohide && delay >= 900 && timeMod == 0
     }
 
     /// Restore the system Dock to its previous state. Fully synchronous on the quit path.
@@ -91,14 +114,45 @@ enum SystemDockManager {
 
     static var isHidden: Bool { UserDefaults.standard.bool(forKey: kHidden) }
 
-    /// Self-heal at launch: if a previous run was force-quit (or crashed) while
-    /// the Dock was hidden, our snapshot is still valid. Restore originals first
-    /// so we don't lose them when we re-hide.
+    /// Self-heal at launch:
+    /// 1. If a snapshot exists and `kHidden` is set, restore originals first so we
+    ///    don't lose them when we re-hide this launch.
+    /// 2. If `kHidden` is set but no snapshot exists (upgrade from a pre-fix build),
+    ///    treat the system as "originals unknown" and restore to native defaults
+    ///    by deleting the keys we wrote.
+    /// 3. If the saved snapshot looks like our own hide-state fingerprint (polluted
+    ///    snapshot from an earlier broken build), discard it before restoring so
+    ///    the restore deletes the keys instead of re-writing the hide values.
     static func selfHealIfStaleHide() {
         let d = UserDefaults.standard
-        if d.bool(forKey: kSnapshotTaken) && d.bool(forKey: kHidden) {
-            restoreSystemDock()
+        let hidden = d.bool(forKey: kHidden)
+        let hasSnapshot = d.bool(forKey: kSnapshotTaken)
+        guard hidden else { return }
+        if hasSnapshot && savedSnapshotMatchesHideFingerprint() {
+            clearSnapshot()
         }
+        restoreSystemDock()
+    }
+
+    /// True iff the saved per-key snapshot values are themselves the values WE
+    /// would have written in `hideSystemDock()`. Signals a polluted snapshot
+    /// captured by an earlier broken build.
+    private static func savedSnapshotMatchesHideFingerprint() -> Bool {
+        let d = UserDefaults.standard
+        let autohide = (d.object(forKey: "savedDock.autohide") as? NSNumber)?.boolValue ?? false
+        let delay = (d.object(forKey: "savedDock.autohide-delay") as? NSNumber)?.doubleValue ?? 0
+        let timeMod = (d.object(forKey: "savedDock.autohide-time-modifier") as? NSNumber)?.doubleValue ?? -1
+        return autohide && delay >= 900 && timeMod == 0
+    }
+
+    private static func clearSnapshot() {
+        let d = UserDefaults.standard
+        d.set(false, forKey: kSnapshotTaken)
+        for key in savedKeys {
+            d.removeObject(forKey: "savedDock.\(key)")
+            d.removeObject(forKey: "savedDock.\(key).present")
+        }
+        d.synchronize()
     }
 
     private static func setDockValue(_ key: String, _ value: CFPropertyList?) {
