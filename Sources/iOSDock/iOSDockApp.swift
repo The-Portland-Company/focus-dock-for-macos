@@ -22,6 +22,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var prefsObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
+        ) { _ in Self.makeSettingsWindowResizable() }
+        NotificationCenter.default.addObserver(
+            forName: NSWindow.didUpdateNotification, object: nil, queue: .main
+        ) { _ in Self.makeSettingsWindowResizable() }
+
         // Show dock window
         dockWindow = DockWindowController()
         dockWindow?.showWindow(nil)
@@ -31,7 +38,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installDockIcon()
 
         // Offer to hide system Dock (so this dock can take over).
-        promptHideSystemDockIfNeeded()
+        SystemDockManager.hideSystemDock()
 
         // Deep-link from folder popover → open Settings.
         NotificationCenter.default.addObserver(
@@ -172,6 +179,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let sel = Selector(name)
             if NSApp.responds(to: sel) {
                 NSApp.sendAction(sel, to: nil, from: nil)
+                DispatchQueue.main.async { Self.makeSettingsWindowResizable() }
                 return
             }
         }
@@ -181,9 +189,34 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             $0.title.localizedCaseInsensitiveContains("preferences")
         }) {
             NSApp.sendAction(item.action!, to: item.target, from: nil)
+            DispatchQueue.main.async { Self.makeSettingsWindowResizable() }
             return
         }
         // Last resort: open the Settings scene by creating it explicitly.
         SettingsWindowFallback.show()
+    }
+
+    static func makeSettingsWindowResizable() {
+        let apply = {
+            for win in NSApp.windows {
+                let title = win.title.lowercased()
+                let id = win.identifier?.rawValue.lowercased() ?? ""
+                let isSettings = title.contains("settings") || title.contains("preferences")
+                    || title == "general" || id.contains("settings") || id.contains("com_apple_swiftui")
+                if isSettings {
+                    win.styleMask.insert(.resizable)
+                    win.minSize = NSSize(width: 480, height: 420)
+                    win.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
+                                         height: CGFloat.greatestFiniteMagnitude)
+                    if win.frameAutosaveName != "FocusDockSettingsWindow" {
+                        win.setFrameAutosaveName("FocusDockSettingsWindow")
+                        win.setFrameUsingName("FocusDockSettingsWindow")
+                    }
+                }
+            }
+        }
+        DispatchQueue.main.async(execute: apply)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: apply)
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: apply)
     }
 }

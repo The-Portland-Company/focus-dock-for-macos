@@ -19,7 +19,7 @@ targets:
         CFBundleVersion: "1"
         LSMinimumSystemVersion: "13.0"
         NSHighResolutionCapable: true
-        LSUIElement: false
+        LSUIElement: true
         NSMainStoryboardFile: ""
     settings:
       base:
