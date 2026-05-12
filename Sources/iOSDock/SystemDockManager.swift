@@ -36,13 +36,17 @@ enum SystemDockManager {
         let d = UserDefaults.standard
         // Save previous values so we can restore.
         if let dock = UserDefaults(suiteName: "com.apple.dock") {
-            d.set(dock.object(forKey: "autohide"), forKey: "savedDock.autohide")
-            d.set(dock.object(forKey: "autohide-delay"), forKey: "savedDock.autohide-delay")
-            d.set(dock.object(forKey: "autohide-time-modifier"), forKey: "savedDock.autohide-time-modifier")
+            if d.object(forKey: "savedDock.autohide") == nil {
+                d.set(dock.object(forKey: "autohide"), forKey: "savedDock.autohide")
+                d.set(dock.object(forKey: "autohide-delay"), forKey: "savedDock.autohide-delay")
+                d.set(dock.object(forKey: "autohide-time-modifier"), forKey: "savedDock.autohide-time-modifier")
+                d.set(dock.object(forKey: "no-bouncing"), forKey: "savedDock.no-bouncing")
+            }
         }
         run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide", "-bool", "true"])
         run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide-delay", "-float", "1000"])
         run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide-time-modifier", "-float", "0"])
+        run("/usr/bin/defaults", ["write", "com.apple.dock", "no-bouncing", "-bool", "true"])
         run("/usr/bin/killall", ["Dock"])
         d.set(true, forKey: kHidden)
     }
@@ -70,6 +74,11 @@ enum SystemDockManager {
             run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide-time-modifier", "-float", String(v)])
         } else {
             run("/usr/bin/defaults", ["delete", "com.apple.dock", "autohide-time-modifier"])
+        }
+        if let v = d.object(forKey: "savedDock.no-bouncing") as? Bool {
+            run("/usr/bin/defaults", ["write", "com.apple.dock", "no-bouncing", "-bool", v ? "true" : "false"])
+        } else {
+            run("/usr/bin/defaults", ["delete", "com.apple.dock", "no-bouncing"])
         }
         run("/usr/bin/killall", ["Dock"])
         d.set(false, forKey: kHidden)

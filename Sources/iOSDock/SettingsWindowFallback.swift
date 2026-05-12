@@ -19,7 +19,7 @@ enum SettingsWindowFallback {
         let host = NSHostingController(rootView: root)
         let win = NSWindow(
             contentRect: NSRect(x: 0, y: 0, width: 520, height: 420),
-            styleMask: [.titled, .closable, .miniaturizable],
+            styleMask: [.titled, .closable, .miniaturizable, .resizable],
             backing: .buffered,
             defer: false
         )
