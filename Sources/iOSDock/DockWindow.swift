@@ -218,6 +218,17 @@ struct DockView: View {
         }
     }
 
+    /// Alignment opposite the dock edge — used to park transient UI (e.g. the
+    /// edit-mode pill) in the magnification headroom so it never overlaps icons.
+    private var oppositeAlignment: Alignment {
+        switch prefs.edge {
+        case .bottom: return .top
+        case .top: return .bottom
+        case .left: return .trailing
+        case .right: return .leading
+        }
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let avail = isVertical ? proxy.size.height : proxy.size.width
@@ -245,6 +256,11 @@ struct DockView: View {
                             .padding(.leading, CGFloat(prefs.paddingLeft))
                             .padding(.trailing, CGFloat(prefs.paddingRight))
                     }
+                }
+                if prefs.isEditingLayout {
+                    EditModePill()
+                        .padding(8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: oppositeAlignment)
                 }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: dockAlignment)
@@ -274,6 +290,29 @@ struct DockView: View {
                 dragState: dragState
             )
         }
+    }
+}
+
+private struct EditModePill: View {
+    @State private var pulse = false
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Edit Layout")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
+        }
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.accentColor)
+                .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 1)
+        )
+        .opacity(pulse ? 1.0 : 0.7)
+        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { pulse = true } }
+        .allowsHitTesting(false)
     }
 }
 

@@ -33,9 +33,11 @@ focus-dock-for-macos/
 │   ├── iOSDockApp.swift         # @main, AppDelegate, menu-bar item, custom dock icon
 │   ├── DockWindow.swift         # Floating dock panel, drag/hover/wiggle, magnification, FolderPopover
 │   ├── AppLibrary.swift         # DockItem/AppEntry/FolderEntry, persistence, tree mutation
-│   ├── Preferences.swift        # UserDefaults-backed settings + RGBA persistence
+│   ├── Preferences.swift        # UserDefaults-backed settings
 │   ├── SettingsView.swift       # About / General / Apps tabs + folder tree
-│   ├── SystemDockManager.swift  # Read & hide/restore com.apple.dock
+│   ├── SystemDockManager.swift  # Read & hide/restore com.apple.dock (sync via CFPreferences)
+│   ├── QuitBackstop.swift       # atexit + signal handlers to restore on abnormal exit
+│   ├── BadgeMonitor.swift       # AX-tree poll of com.apple.dock for badge counts & attention
 │   └── SettingsWindowFallback.swift
 ├── docs/context.md              # ← this file
 └── README.md
@@ -56,7 +58,7 @@ focus-dock-for-macos/
 - Gaussian falloff centered on cursor (`onContinuousHover` reports `dockHoverPoint`).
 - Icons are **pre-rasterized to 256×256** in `IconCache` (`NSWorkspace.shared.icon` drawn into a fresh high-res `NSImage`). SwiftUI was originally upscaling small-rep icons → blurry; cache forces a high-res source.
 - Display uses `.frame(width: iconSize * scale, height: iconSize * scale)` instead of `.scaleEffect()` so SwiftUI rasterizes at the displayed size each frame (no bitmap upscale).
-- **Dock height does not change with magnification**: the visible dock chrome is bottom-anchored at `restingThickness` (resting icon size + perpendicular padding + 8). The window itself is sized to fit `max(magnified, effectiveIcon)` so the icons have headroom to grow upward without resizing the chrome.
+- **Dock height does not change with magnification**: the icon row is bottom-anchored at the resting thickness. The window itself is sized to fit `max(magnified, effectiveIcon)` so icons have headroom to grow upward without shifting the resting row.
 - The `Magnified size` slider only affects icon growth; bottom of the dock stays put.
 
 ### Layout / position
@@ -71,21 +73,20 @@ focus-dock-for-macos/
 ### Flush with edge
 - Pref key kept as `flushBottom` for storage compatibility, surfaced as **"Flush with Edge"**.
 - Applies to whichever edge the dock is on:
-  - `bottom` → `y = area.minY`, square bottom-left + bottom-right
-  - `top` → `y = area.maxY - thickness`, square top-left + top-right
-  - `left` → `x = area.minX`, square top-left + bottom-left
-  - `right` → `x = area.maxX - thickness`, square top-right + bottom-right
+  - `bottom` → `y = area.minY`
+  - `top` → `y = area.maxY - thickness`
+  - `left` → `x = area.minX`
+  - `right` → `x = area.maxX - thickness`
 - Uses `screen.frame` (full extent) instead of `screen.visibleFrame` so the dock can sit against the absolute edge.
-- Corner squaring is implemented via `UnevenRoundedRectangle` (`dockShape` computed property).
-- The "dock has a gap below screen edge when flush" bug has reappeared three times historically (commits `401f62d`, `827a29e`, `634bb50`). Root cause is SwiftUI/`NSHostingController` introducing safe-area insets on the borderless `NSPanel`, and ZStack-based edge anchoring is fragile against any sub-pixel rounding the system layer adds. The current defense is **belt-and-suspenders**:
+- The "dock has a gap below screen edge when flush" bug has reappeared three times historically (commits `401f62d`, `827a29e`, `634bb50`). Root cause is SwiftUI/`NSHostingController` introducing safe-area insets on the borderless `NSPanel`. The current defense is **belt-and-suspenders**:
   1. `.ignoresSafeArea()` on the `DockView` root.
-  2. ZStack uses `alignment: dockAlignment` so the resting-thickness chrome pins to the configured edge.
+  2. ZStack uses `alignment: dockAlignment` so the icon row pins to the configured edge.
   3. `DockHostingController` — a thin `NSHostingController` subclass — negates `view.safeAreaInsets` by setting `additionalSafeAreaInsets` to their negative on every `viewDidLayout`, hard-zeroing the host's safe area at the AppKit level.
-  4. **Edge bleed**: when flush, the window frame is extended 3 pt past the screen edge in the perpendicular axis. The chrome stays anchored to the edge inside the larger window, so those 3 pt sit off-screen and any residual SwiftUI inset is swallowed by the bleed. The bleed is invisible (off-screen) so it has no cosmetic cost.
+  4. **Edge bleed**: when flush, the window frame is extended 3 pt past the screen edge in the perpendicular axis. The icons stay anchored to the edge inside the larger window, so those 3 pt sit off-screen and any residual SwiftUI inset is swallowed by the bleed. The bleed is invisible (off-screen) so it has no cosmetic cost.
   Do not regress any of these four — removing any single one could re-open the bug under a future macOS / SwiftUI build.
 
 ### Padding (inside the dock)
-- Four sliders for Top / Bottom / Left / Right *internal* padding (between dock border and icons).
+- Four sliders for Top / Bottom / Left / Right *internal* padding (window-frame insets around the icon row).
 - Earlier the same prefs controlled *screen margins*. Reinterpreted on first launch via a one-time migration (`didMigratePadding`) bumping defaults to padding-appropriate values.
 - Top/Bottom were originally swapped because both were applying `.padding(.vertical, paddingTop)` — now uses explicit `.padding(.top, …)` / `.padding(.bottom, …)`.
 - **"All" toggle** at top of the section: when on, shows one slider that drives all four uniformly.
@@ -96,19 +97,23 @@ focus-dock-for-macos/
 - **Fill width** toggle — sizes the dock to `screen.width - 16` and computes spacing automatically: `(interior - n × icon) / (n - 1)`.
 - **Labels** picker: Tool tip (system native), Above icon, Below icon.
 - **Magnify on hover** + **Magnified size** slider.
-- **Corner radius** slider (0–40 pt).
 
-### Dock background & border
-- Background uses `NSVisualEffectView` material `.popover` (theme-aware light/dark) as the base. An optional tint overlay (RGBA + alpha) is drawn on top of the blur, behind the border.
-- Border: show/hide toggle, color + opacity picker, width slider 0–6 pt.
-- Color values persist as `[r,g,b,a]` arrays via the `Preferences.RGBA` struct, bridged to SwiftUI `Color` through `rgbaBinding(_:)` (round-trips through sRGB `NSColor`).
-- A small custom **color preview swatch** appears next to each `ColorPicker` showing the chosen hue at full opacity (separate from macOS's diagonal-split swatch which can be confusing at low alpha).
+### Dock chrome
+- There is no chrome. The dock window is transparent (`backgroundColor = .clear`, `hasShadow = false`); icons float directly on the desktop with no panel, blur, fill, border, corner shape, or shadow.
+- Click-through is automatic: only icon hit-targets register taps, transparent space passes events to whatever is behind.
+- An **edit-mode pill** (`EditModePill`) floats opposite the dock edge (e.g. at the top of the window when the dock is on the bottom) whenever `isEditingLayout` is true — the only visible affordance now that there is no chrome to highlight.
+
+### Badges (numeric + attention)
+- `BadgeMonitor` (singleton, started in `applicationDidFinishLaunching`) polls the system Dock's accessibility tree (`com.apple.dock`, child of which exposes per-item `AXTitle` + `AXStatusLabel` + an attention attribute) every ~2 s.
+- Results published into `AppLibrary.badgeStates: [String: AppBadgeState]` keyed by lowercased app display name.
+- `DockItemView` renders `badgeOverlay(displaySize:)`: a red rounded-bold capsule (SF Pro Rounded) top-right of the icon for numeric counts, or a pulsing red `AttentionDot` when no count is present but attention is requested. Both scale with magnification.
+- Requires Accessibility permission. First poll calls `AXIsProcessTrustedWithOptions` with the prompt option; until granted, badges stay empty. Re-checks trust each tick so a later grant takes effect within ~2 s without restart. No Info.plist entry needed (AX uses TCC).
 
 ### Click-to-edit numbers
-- `EditableNumber` SwiftUI view: shows monospaced text, click → focused `TextField`, commits on Return / focus-loss. Applied to every numeric slider (icon size, spacing, magnified, border width, corner radius, edge offset, all padding sliders).
+- `EditableNumber` SwiftUI view: shows monospaced text, click → focused `TextField`, commits on Return / focus-loss. Applied to every numeric slider (icon size, spacing, magnified, edge offset, all padding sliders).
 
 ### Labels & tooltips
-- `nativeToolTip(_ text: String)` is a custom helper that sets `NSView.toolTip` directly via an `NSViewRepresentable`. SwiftUI's built-in `.help()` was being intercepted by `.onContinuousHover` on the dock background and didn't reliably register on the complex DockItemView hierarchy. The native helper bypasses that.
+- `nativeToolTip(_ text: String)` is a custom helper that sets `NSView.toolTip` directly via an `NSViewRepresentable`. SwiftUI's built-in `.help()` was being intercepted by `.onContinuousHover` on the dock root and didn't reliably register on the complex DockItemView hierarchy. The native helper bypasses that.
 
 ### Tree view (Settings → Apps)
 - Top-level items + folders shown with collapsible chevrons.
@@ -133,7 +138,7 @@ The three system-window settings from macOS's Desktop & Dock pane (minimize anim
 
 ### System integration
 - **System Settings link** at the top of every Settings tab opens macOS's Desktop & Dock pane via `x-apple.systempreferences:com.apple.preference.dock`.
-- **System Dock take-over:** on first launch the app prompts the user; accepting writes `autohide`, `autohide-delay`, `autohide-time-modifier` in `com.apple.dock` and runs `killall Dock`. Original values are stashed in our UserDefaults and restored on `applicationWillTerminate` or via the live Settings toggle.
+- **System Dock take-over:** on first launch the app prompts the user; accepting writes `autohide`, `autohide-delay`, `autohide-time-modifier` to `com.apple.dock` via synchronous `CFPreferencesSetAppValue` + `CFPreferencesAppSynchronize`, then `killall Dock` (waited on synchronously). Original values are snapshotted to our UserDefaults under a `kSnapshotTaken` flag plus per-key `*.present` booleans so absent originals restore correctly (via `CFPreferencesSetAppValue(_, nil, _)`) instead of being mistaken for `false`. Restore runs from both `applicationShouldTerminate` and `applicationWillTerminate`; a `QuitBackstop` registers `atexit` + signal handlers (SIGTERM/SIGINT/SIGHUP/SIGQUIT) so abnormal exits still restore. On launch, `selfHealIfStaleHide()` detects the "previously hid but not yet restored" state and restores before re-snapshotting, so the snapshot can't capture our own hide values.
 - **About tab** has a green "Your system Dock is safe" badge confirming restore-on-quit/uninstall.
 - **About tab** has a purple "Help shape Focus: Dock" badge with View on GitHub / Submit an issue links.
 - **About → Installed files & permissions** disclosure lists every path the app touches (with reveal-in-Finder buttons) and every permission used. Explicit note: no Accessibility or Screen Recording permission is requested.
@@ -147,8 +152,7 @@ The three system-window settings from macOS's Desktop & Dock pane (minimize anim
 ### Reset
 - Every controllable preference in General has a circular-arrow reset button next to it with a confirmation dialog.
 - A "Reset All to Defaults" destructive button at the bottom of General returns every value to defaults (apps and folders not affected).
-- All defaults centralized in `Preferences.defaultValues : [Key: Any]`. RGBA prefs are special-cased in `reset(_:)`/`resetAll()`.
-- The "Use macOS Native Default" buttons in the Background/Border sections were removed per user request (per-setting + Reset All cover that need).
+- All defaults centralized in `Preferences.defaultValues : [Key: Any]`.
 
 ### App identity / icon
 - Custom-drawn app icon: iOS-style blue→purple gradient with a 3×3 grid of white rounded squares, generated at launch via `NSApp.applicationIconImage` (no asset catalog needed for MVP).
@@ -161,7 +165,7 @@ The three system-window settings from macOS's Desktop & Dock pane (minimize anim
 1. **Initial dock window invisible** — `NSPanel` with titled style was only rendering the red close button against transparent content. Switched to `.borderless, .nonactivatingPanel`.
 2. **Settings window didn't open reliably** — multi-selector fallback (`showSettingsWindow:` → `showPreferencesWindow:` → main-menu → `SettingsWindowFallback`).
 3. **Icons blurry on hover** — `.scaleEffect` upscales rasterized bitmap. Switched to `.frame(width:height:)` with pre-rasterized 256pt source.
-4. **Magnification grew dock window** — bottom-anchored chrome with separate `restingThickness`.
+4. **Magnification grew dock window** — bottom-anchored icon row at resting thickness; window expands upward only so magnified icons get headroom without shifting the anchor.
 5. **Drop didn't create folder** — model mutation was inside `withAnimation`; SwiftUI animated a view whose model had already moved. Moved mutation outside.
 6. **Margins did nothing** — `flushBottom` had silently been written `true`; original code made flush *override* `marginBottom`. Re-architected so margins → internal padding, added a separate `edgeOffset`, and flush no longer overrides positioning logic on padding.
 7. **"Flush with Edge" left a gap** — `NSHostingController` applies SwiftUI safe-area insets to borderless panels. Fixed via `.ignoresSafeArea()`.
@@ -175,8 +179,9 @@ The three system-window settings from macOS's Desktop & Dock pane (minimize anim
 
 ## Privacy & permissions
 
-The app does **not** request Accessibility, Full Disk Access, or Screen Recording. Operations it performs:
-- Modifies `com.apple.dock` user defaults and runs `killall Dock`.
+The app requests **Accessibility** the first time `BadgeMonitor` polls — needed to read badge counts and attention state from the system Dock's AX tree. It does **not** request Full Disk Access or Screen Recording. Operations it performs:
+- Modifies `com.apple.dock` user defaults (via `CFPreferencesSetAppValue`) and runs `killall Dock`.
+- Reads the system Dock's accessibility tree to surface per-app badge labels.
 - Reads installed app icons via `NSWorkspace.shared.icon(forFile:)`.
 - Launches apps via `NSWorkspace.shared.open(_:)`.
 - Reads/writes `~/Library/Application Support/FocusDock/library.json`.
@@ -187,7 +192,7 @@ The app does **not** request Accessibility, Full Disk Access, or Screen Recordin
 
 ## Open work / not yet implemented
 
-- **Restore-on-uninstall**: `applicationWillTerminate` only fires on clean quit. Trashing the app while running won't restore the system Dock. Robust fix needs a LaunchAgent that runs at login and restores prefs if the app has been deleted.
+- **Restore-on-uninstall**: signal-handler backstop covers SIGTERM/SIGINT/SIGHUP/SIGQUIT and `atexit`, so most abnormal quits restore. A trash-while-running force-kill (SIGKILL) is still uncoverable inside the process; on next login `selfHealIfStaleHide()` would restore — but only if the app launches again. A LaunchAgent that restores prefs when the app bundle is missing remains the only fully robust path.
 - **TestFlight / App Store**: requires real Developer ID team, App Sandbox entitlements, security-scoped bookmarks for user-added app paths, archive + notarization.
 - **Auto-hide dock**, **bounce-on-launch**, **show-recent-apps** prefs are storable but not yet wired to visual behavior.
 - **Scroll-on-overflow with chevron arrows** — currently overflowing icons are compressed instead. Either/both behaviors could be added with a toggle.
