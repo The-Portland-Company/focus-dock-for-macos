@@ -1,0 +1,35 @@
+name: FocusDock
+options:
+  bundleIdPrefix: com.theportlandcompany
+  deploymentTarget:
+    macOS: "13.0"
+  createIntermediateGroups: true
+targets:
+  FocusDock:
+    type: application
+    platform: macOS
+    sources:
+      - path: Sources/iOSDock
+    info:
+      path: Sources/iOSDock/Info.plist
+      properties:
+        CFBundleName: Focus Dock
+        CFBundleDisplayName: "Focus: Dock"
+        CFBundleShortVersionString: "0.1.0"
+        CFBundleVersion: "1"
+        LSMinimumSystemVersion: "13.0"
+        NSHighResolutionCapable: true
+        LSUIElement: false
+        NSMainStoryboardFile: ""
+    settings:
+      base:
+        PRODUCT_BUNDLE_IDENTIFIER: com.theportlandcompany.FocusDock
+        PRODUCT_NAME: "Focus Dock"
+        MARKETING_VERSION: "0.1.0"
+        CURRENT_PROJECT_VERSION: "1"
+        GENERATE_INFOPLIST_FILE: NO
+        ENABLE_HARDENED_RUNTIME: YES
+        CODE_SIGN_STYLE: Automatic
+        CODE_SIGN_IDENTITY: "-"
+        SWIFT_VERSION: "5.9"
+        MACOSX_DEPLOYMENT_TARGET: "13.0"

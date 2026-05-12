@@ -1,0 +1,677 @@
+import SwiftUI
+import AppKit
+import UniformTypeIdentifiers
+
+enum SettingsTab: String { case about, general, apps }
+
+struct SettingsView: View {
+    @EnvironmentObject var library: AppLibrary
+    @EnvironmentObject var prefs: Preferences
+    @State private var dockHidden: Bool = SystemDockManager.isHidden
+    @State private var resetKey: Preferences.Key? = nil
+    @State private var showResetAll: Bool = false
+
+    @State private var selection: SettingsTab = {
+        // First time the user sees Settings → land on About.
+        // After that → General.
+        UserDefaults.standard.bool(forKey: "hasSeenSettings") ? .general : .about
+    }()
+
+    var body: some View {
+        TabView(selection: $selection) {
+            aboutTab
+                .tabItem { Label("About", systemImage: "info.circle") }
+                .tag(SettingsTab.about)
+            generalTab
+                .tabItem { Label("General", systemImage: "gearshape") }
+                .tag(SettingsTab.general)
+            appsTab
+                .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
+                .tag(SettingsTab.apps)
+        }
+        .frame(width: 540, height: 480)
+        .padding()
+        .onAppear {
+            UserDefaults.standard.set(true, forKey: "hasSeenSettings")
+        }
+    }
+
+    // MARK: - About
+
+    private var aboutTab: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 14) {
+                HStack(spacing: 14) {
+                    if let img = NSApp.applicationIconImage {
+                        Image(nsImage: img).resizable().frame(width: 96, height: 96)
+                    }
+                    VStack(alignment: .leading) {
+                        Text("Focus: Dock").font(.title2).bold()
+                        Text("Version \(Bundle.main.infoDictionary?["CFBundleShortVersionString"] as? String ?? "0.1.0")")
+                            .foregroundStyle(.secondary)
+                    }
+                }
+                Divider()
+                Text("What it does")
+                    .font(.headline)
+                Text("Replicates iOS-style folder creation for your macOS Dock. Drag any app onto another and hold for about a second — icons begin to wiggle (edit mode), a folder appears, and releasing drops the app inside.")
+
+                Text("Why a replacement dock instead of modifying the real one?")
+                    .font(.headline)
+                    .padding(.top, 18)
+                Text("Apple's Dock (the process Dock.app) is owned by the system and protected by System Integrity Protection and the App Store sandbox. Third-party apps cannot inject drag behavior, animations, or folder logic into it. The only way to deliver this feature is to ship a separate dock that runs alongside — or in place of — the system Dock. When you launch this app it offers to hide the system Dock automatically; quitting or uninstalling restores it.")
+                    .foregroundStyle(.secondary)
+
+                restoreBadge
+                    .padding(.top, 6)
+
+                DisclosureGroup("Installed files & permissions") {
+                    VStack(alignment: .leading, spacing: 14) {
+                        Text("Installed files").font(.subheadline).bold()
+                        ForEach(installedFiles, id: \.path) { entry in
+                            filePathRow(entry)
+                        }
+
+                        Divider()
+
+                        Text("Permissions this app uses").font(.subheadline).bold()
+                        ForEach(permissionEntries, id: \.title) { entry in
+                            permissionRow(entry)
+                        }
+                    }
+                    .padding(.top, 8)
+                }
+                .padding(.top, 8)
+            }
+            .padding(20)
+            .frame(maxWidth: .infinity, alignment: .leading)
+        }
+    }
+
+    private var restoreBadge: some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: "checkmark.shield.fill")
+                .foregroundStyle(.white)
+                .padding(8)
+                .background(Color.green.gradient, in: RoundedRectangle(cornerRadius: 8, style: .continuous))
+            VStack(alignment: .leading, spacing: 2) {
+                Text("Your system Dock is safe.").font(.callout).bold()
+                Text("Hiding the system Dock is reversible. Quitting Focus: Dock or deleting it from /Applications will automatically restore the native Dock — no Terminal commands or manual cleanup required.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+        }
+        .padding(12)
+        .frame(maxWidth: .infinity, alignment: .leading)
+        .background(
+            RoundedRectangle(cornerRadius: 10, style: .continuous)
+                .fill(Color.green.opacity(0.12))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 10, style: .continuous)
+                        .strokeBorder(Color.green.opacity(0.35), lineWidth: 0.5)
+                )
+        )
+    }
+
+    // MARK: - Installed files
+
+    private struct InstalledFileEntry {
+        let icon: String
+        let label: String
+        let path: String
+    }
+
+    private var installedFiles: [InstalledFileEntry] {
+        let bundle = Bundle.main.bundlePath
+        let appSupport = (FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask).first?
+            .appendingPathComponent("FocusDock", isDirectory: true).path) ?? "~/Library/Application Support/FocusDock"
+        let prefs = NSHomeDirectory() + "/Library/Preferences/" + (Bundle.main.bundleIdentifier ?? "com.spencerhill.MacOSDockFolders") + ".plist"
+        return [
+            .init(icon: "app.dashed", label: "App bundle", path: bundle),
+            .init(icon: "folder.fill", label: "Dock library (your apps + folders, JSON)", path: appSupport + "/library.json"),
+            .init(icon: "doc.text.fill", label: "User preferences (settings)", path: prefs)
+        ]
+    }
+
+    private func filePathRow(_ entry: InstalledFileEntry) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: entry.icon)
+                .foregroundStyle(.secondary)
+                .frame(width: 18)
+            VStack(alignment: .leading, spacing: 1) {
+                Text(entry.label).font(.callout)
+                Text(entry.path)
+                    .font(.system(.caption, design: .monospaced))
+                    .foregroundStyle(.secondary)
+                    .textSelection(.enabled)
+            }
+            Spacer()
+            Button {
+                NSWorkspace.shared.activateFileViewerSelecting([URL(fileURLWithPath: entry.path)])
+            } label: { Image(systemName: "magnifyingglass") }
+                .buttonStyle(.borderless)
+                .help("Reveal in Finder")
+        }
+    }
+
+    // MARK: - Permissions
+
+    private struct PermissionEntry {
+        let icon: String
+        let title: String
+        let detail: String
+    }
+
+    private var permissionEntries: [PermissionEntry] {
+        [
+            .init(icon: "dock.rectangle",
+                  title: "Modify the system Dock's preferences",
+                  detail: "Writes autohide, autohide-delay, and autohide-time-modifier in com.apple.dock to hide Apple's Dock, then runs `killall Dock` so the change takes effect. Original values are saved and restored on quit / uninstall."),
+            .init(icon: "app.badge",
+                  title: "Read installed application icons",
+                  detail: "Uses NSWorkspace.shared.icon(forFile:) to load app icons from /Applications and elsewhere for display in the dock."),
+            .init(icon: "arrow.up.right.square",
+                  title: "Launch other applications",
+                  detail: "Uses NSWorkspace.shared.open(_:) when you click an icon in the dock."),
+            .init(icon: "folder",
+                  title: "Read/write the dock library file",
+                  detail: "Persists your dock items in ~/Library/Application Support/FocusDock/library.json."),
+            .init(icon: "gearshape",
+                  title: "Read/write its own preferences",
+                  detail: "Stores your settings in this app's UserDefaults plist."),
+            .init(icon: "rectangle.on.rectangle",
+                  title: "Display a floating panel above all apps",
+                  detail: "A standard non-activating panel pinned to the screen — no Accessibility or Screen Recording permission is requested.")
+        ]
+    }
+
+    private func permissionRow(_ entry: PermissionEntry) -> some View {
+        HStack(alignment: .top, spacing: 10) {
+            Image(systemName: entry.icon)
+                .foregroundStyle(Color.accentColor)
+                .frame(width: 22)
+            VStack(alignment: .leading, spacing: 2) {
+                Text(entry.title).font(.callout)
+                Text(entry.detail).font(.caption).foregroundStyle(.secondary)
+            }
+        }
+    }
+
+    // MARK: - General
+
+    private var generalTab: some View {
+        Form {
+            Section("Presentation") {
+                settingRow(.showDockIcon) {
+                    Toggle("Show Dock icon", isOn: Binding(
+                        get: { prefs.showDockIcon },
+                        set: { prefs.showDockIcon = $0 }
+                    ))
+                }
+                settingRow(.showMenuBarIcon) {
+                    Toggle("Show menu-bar (Toolbar) icon", isOn: Binding(
+                        get: { prefs.showMenuBarIcon },
+                        set: { prefs.showMenuBarIcon = $0 }
+                    ))
+                }
+            }
+            Section("Appearance") {
+                settingRow(.iconSize) {
+                    HStack {
+                        Text("Icon size")
+                        Slider(value: Binding(
+                            get: { prefs.iconSize },
+                            set: { prefs.iconSize = $0 }
+                        ), in: 32...128, step: 1)
+                        Text("\(Int(prefs.iconSize)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                    }
+                }
+                settingRow(.spacing) {
+                    HStack {
+                        Text("Spacing")
+                        Slider(value: Binding(
+                            get: { prefs.spacing },
+                            set: { prefs.spacing = $0 }
+                        ), in: 0...40, step: 1)
+                        Text("\(Int(prefs.spacing)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                    }
+                }
+                settingRow(.labelMode) {
+                    Picker("Labels", selection: Binding(
+                        get: { prefs.labelMode },
+                        set: { prefs.labelMode = $0 }
+                    )) {
+                        ForEach(Preferences.LabelMode.allCases) { mode in
+                            Text(mode.label).tag(mode)
+                        }
+                    }
+                }
+                settingRow(.magnifyOnHover) {
+                    Toggle("Magnify on hover", isOn: Binding(
+                        get: { prefs.magnifyOnHover },
+                        set: { prefs.magnifyOnHover = $0 }
+                    ))
+                }
+                if prefs.magnifyOnHover {
+                    settingRow(.magnifySize) {
+                        HStack {
+                            Text("Magnified size")
+                            Slider(value: Binding(
+                                get: { prefs.magnifySize },
+                                set: { prefs.magnifySize = $0 }
+                            ), in: max(prefs.iconSize, 48)...192, step: 1)
+                            Text("\(Int(prefs.magnifySize)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                        }
+                    }
+                }
+            }
+            Section("Margins (screen edges)") {
+                settingRow(.marginTop) { marginSlider("Top", value: Binding(get: { prefs.marginTop }, set: { prefs.marginTop = $0 })) }
+                settingRow(.marginBottom) { marginSlider("Bottom", value: Binding(get: { prefs.marginBottom }, set: { prefs.marginBottom = $0 })) }
+                settingRow(.marginLeft) { marginSlider("Left", value: Binding(get: { prefs.marginLeft }, set: { prefs.marginLeft = $0 })) }
+                settingRow(.marginRight) { marginSlider("Right", value: Binding(get: { prefs.marginRight }, set: { prefs.marginRight = $0 })) }
+            }
+            Section("Dock Background") {
+                Toggle("Tint the dock background (over the blur)", isOn: Binding(
+                    get: { prefs.tintBackground },
+                    set: { prefs.tintBackground = $0 }
+                ))
+                if prefs.tintBackground {
+                    ColorPicker("Background color & opacity",
+                                selection: rgbaBinding(\.backgroundColor),
+                                supportsOpacity: true)
+                }
+                HStack {
+                    Spacer()
+                    Button("Use macOS Native Default") { prefs.resetBackgroundToNative() }
+                }
+            }
+            Section("Dock Border") {
+                Toggle("Show border", isOn: Binding(
+                    get: { prefs.showBorder },
+                    set: { prefs.showBorder = $0 }
+                ))
+                if prefs.showBorder {
+                    ColorPicker("Border color & opacity",
+                                selection: rgbaBinding(\.borderColor),
+                                supportsOpacity: true)
+                    HStack {
+                        Text("Border width")
+                        Slider(value: Binding(
+                            get: { prefs.borderWidth },
+                            set: { prefs.borderWidth = $0 }
+                        ), in: 0...6, step: 0.5)
+                        Text(String(format: "%.1f pt", prefs.borderWidth)).monospacedDigit().frame(width: 56, alignment: .trailing)
+                    }
+                }
+                HStack {
+                    Spacer()
+                    Button("Use macOS Native Default") { prefs.resetBorderToNative() }
+                }
+            }
+            Section("Shape") {
+                settingRow(.flushBottom) {
+                    Toggle("Flush with bottom of screen", isOn: Binding(
+                        get: { prefs.flushBottom },
+                        set: { prefs.flushBottom = $0 }
+                    ))
+                }
+                Text("When on, the dock sits against the absolute bottom of the screen and the bottom-left/bottom-right corners are squared off. Applies when the dock is on the bottom edge.")
+                    .font(.caption).foregroundStyle(.secondary)
+                settingRow(.cornerRadius) {
+                    HStack {
+                        Text("Corner radius")
+                        Slider(value: Binding(
+                            get: { prefs.cornerRadius },
+                            set: { prefs.cornerRadius = $0 }
+                        ), in: 0...40, step: 1)
+                        Text("\(Int(prefs.cornerRadius)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                    }
+                }
+            }
+            Section("Layout") {
+                settingRow(.edge) {
+                    Picker("Snap to edge", selection: Binding(
+                        get: { prefs.edge },
+                        set: { prefs.edge = $0 }
+                    )) {
+                        Text("Bottom").tag(Preferences.Edge.bottom)
+                        Text("Left").tag(Preferences.Edge.left)
+                        Text("Right").tag(Preferences.Edge.right)
+                        Text("Top").tag(Preferences.Edge.top)
+                    }
+                }
+                Toggle("Edit Layout (drag the dock to any edge to snap)", isOn: Binding(
+                    get: { prefs.isEditingLayout },
+                    set: { prefs.isEditingLayout = $0 }
+                ))
+                Text("Left, right, and top placement are available while Edit Layout is on. Bottom is the default to match the system Dock.")
+                    .font(.caption).foregroundStyle(.secondary)
+            }
+            Section("System Dock") {
+                Toggle("Hide system Dock while this app is running", isOn: Binding(
+                    get: { dockHidden },
+                    set: { newValue in
+                        dockHidden = newValue
+                        if newValue { SystemDockManager.hideSystemDock() }
+                        else { SystemDockManager.restoreSystemDock() }
+                    }
+                ))
+                Text("Automatically restored when you quit or uninstall the app.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+            }
+            Section {
+                HStack {
+                    Spacer()
+                    Button(role: .destructive) {
+                        showResetAll = true
+                    } label: {
+                        Label("Reset All to Defaults", systemImage: "arrow.counterclockwise")
+                    }
+                }
+            }
+        }
+        .formStyle(.grouped)
+        .confirmationDialog(
+            "Reset this setting to its default?",
+            isPresented: Binding(get: { resetKey != nil }, set: { if !$0 { resetKey = nil } }),
+            presenting: resetKey
+        ) { key in
+            Button("Reset", role: .destructive) { prefs.reset(key) }
+            Button("Cancel", role: .cancel) {}
+        } message: { key in
+            Text("This will restore '\(key.rawValue)' to its built-in default value.")
+        }
+        .confirmationDialog(
+            "Reset every preference on this tab to defaults?",
+            isPresented: $showResetAll
+        ) {
+            Button("Reset All", role: .destructive) { prefs.resetAll() }
+            Button("Cancel", role: .cancel) {}
+        } message: {
+            Text("Every value in General will return to the value it had on a fresh install. Your apps and folders are not affected.")
+        }
+    }
+
+    /// Wraps a control with a tiny reset button.
+    private func settingRow<Content: View>(_ key: Preferences.Key, @ViewBuilder content: () -> Content) -> some View {
+        HStack(spacing: 6) {
+            content()
+            Button {
+                resetKey = key
+            } label: {
+                Image(systemName: "arrow.counterclockwise")
+                    .foregroundStyle(.secondary)
+            }
+            .buttonStyle(.borderless)
+            .help("Reset to default")
+        }
+    }
+
+    // MARK: - Apps (tree view + drag-and-drop)
+
+    private var appsTab: some View {
+        VStack(alignment: .leading, spacing: 12) {
+            HStack {
+                Text("Folder tree").font(.headline)
+                Spacer()
+                Button {
+                    cloneFromSystemDock()
+                } label: { Label("Clone System Dock", systemImage: "square.and.arrow.down") }
+                Button {
+                    addApp()
+                } label: { Label("Add App…", systemImage: "plus") }
+            }
+            Text("Drag any app to drop it into a folder, or onto the bottom row to move it back to the top level.")
+                .font(.caption).foregroundStyle(.secondary)
+            FolderTreeView()
+                .environmentObject(library)
+        }
+        .padding(.bottom, 8)
+    }
+
+    /// Two-way bridge between SwiftUI `Color` (with opacity) and our RGBA struct.
+    private func rgbaBinding(_ keyPath: ReferenceWritableKeyPath<Preferences, Preferences.RGBA>) -> Binding<Color> {
+        Binding(
+            get: {
+                let v = prefs[keyPath: keyPath]
+                return Color(.sRGB, red: v.r, green: v.g, blue: v.b, opacity: v.a)
+            },
+            set: { newColor in
+                let ns = NSColor(newColor).usingColorSpace(.sRGB) ?? .black
+                prefs[keyPath: keyPath] = Preferences.RGBA(
+                    Double(ns.redComponent),
+                    Double(ns.greenComponent),
+                    Double(ns.blueComponent),
+                    Double(ns.alphaComponent)
+                )
+            }
+        )
+    }
+
+    private func marginSlider(_ label: String, value: Binding<Double>) -> some View {
+        HStack {
+            Text(label).frame(width: 70, alignment: .leading)
+            Slider(value: value, in: 0...80, step: 1)
+            Text("\(Int(value.wrappedValue)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+        }
+    }
+
+    private func cloneFromSystemDock() {
+        let paths = SystemDockManager.readSystemDockApps()
+        guard !paths.isEmpty else {
+            let a = NSAlert()
+            a.messageText = "Couldn't read the system Dock."
+            a.informativeText = "No pinned apps were found in com.apple.dock preferences."
+            a.runModal()
+            return
+        }
+        library.items = paths.compactMap { path in
+            guard FileManager.default.fileExists(atPath: path) else { return nil }
+            let name = (path as NSString).lastPathComponent.replacingOccurrences(of: ".app", with: "")
+            return .app(AppEntry(path: path, name: name))
+        }
+    }
+
+    private func addApp() {
+        let panel = NSOpenPanel()
+        panel.allowedContentTypes = [UTType.application]
+        panel.directoryURL = URL(fileURLWithPath: "/Applications")
+        panel.allowsMultipleSelection = true
+        panel.canChooseDirectories = false
+        if panel.runModal() == .OK {
+            for url in panel.urls {
+                library.addApp(at: url.path)
+            }
+        }
+    }
+}
+
+// MARK: - Folder tree view
+
+private let appDragType = "com.spencerhill.MacOSDockFolders.app-id"
+
+struct FolderTreeView: View {
+    @EnvironmentObject var library: AppLibrary
+    @State private var expandedFolders: Set<UUID> = []
+    @State private var dropTargetFolder: UUID? = nil
+    @State private var topLevelDropHover: Bool = false
+
+    var body: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 2) {
+                ForEach(library.items) { item in
+                    switch item {
+                    case .app(let a):
+                        appRow(a)
+                    case .folder(let f):
+                        folderRow(f)
+                    }
+                }
+                // Drop target: move-to-top-level
+                topLevelDropRow
+            }
+            .padding(8)
+        }
+        .background(Color(nsColor: .textBackgroundColor).opacity(0.5))
+        .clipShape(RoundedRectangle(cornerRadius: 8, style: .continuous))
+        .overlay(RoundedRectangle(cornerRadius: 8, style: .continuous).strokeBorder(Color.primary.opacity(0.1)))
+    }
+
+    // MARK: rows
+
+    private func appRow(_ app: AppEntry) -> some View {
+        HStack {
+            Image(nsImage: app.icon).resizable().frame(width: 24, height: 24)
+            Text(app.name)
+            Spacer()
+            Button(role: .destructive) {
+                library.removeItem(id: app.id)
+            } label: { Image(systemName: "trash") }
+                .buttonStyle(.borderless)
+        }
+        .padding(.vertical, 4)
+        .padding(.horizontal, 6)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.04)))
+        .contentShape(Rectangle())
+        .onDrag {
+            NSItemProvider(object: app.id.uuidString as NSString)
+        }
+    }
+
+    private func folderRow(_ folder: FolderEntry) -> some View {
+        let expanded = expandedFolders.contains(folder.id)
+        let isDropTarget = dropTargetFolder == folder.id
+        return VStack(alignment: .leading, spacing: 2) {
+            HStack {
+                Button {
+                    if expanded { expandedFolders.remove(folder.id) }
+                    else { expandedFolders.insert(folder.id) }
+                } label: {
+                    Image(systemName: expanded ? "chevron.down" : "chevron.right")
+                        .frame(width: 14)
+                }
+                .buttonStyle(.borderless)
+
+                FolderIconView(folder: folder, size: 24)
+                    .frame(width: 24, height: 24)
+
+                renamableName(folder)
+                Text("(\(folder.apps.count))").foregroundStyle(.secondary).font(.caption)
+                Spacer()
+                Button(role: .destructive) {
+                    library.removeItem(id: folder.id)
+                } label: { Image(systemName: "trash") }
+                    .buttonStyle(.borderless)
+            }
+            .padding(.vertical, 4)
+            .padding(.horizontal, 6)
+            .background(
+                RoundedRectangle(cornerRadius: 6)
+                    .fill(isDropTarget ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.06))
+            )
+            .onDrop(of: [.text], isTargeted: Binding(
+                get: { dropTargetFolder == folder.id },
+                set: { dropTargetFolder = $0 ? folder.id : nil }
+            )) { providers in
+                handleDrop(providers: providers, intoFolder: folder.id)
+            }
+
+            if expanded {
+                VStack(alignment: .leading, spacing: 2) {
+                    if folder.apps.isEmpty {
+                        Text("Empty folder").font(.caption).foregroundStyle(.secondary)
+                            .padding(.leading, 36)
+                    }
+                    ForEach(folder.apps) { app in
+                        HStack {
+                            Image(nsImage: app.icon).resizable().frame(width: 20, height: 20)
+                            Text(app.name).font(.callout)
+                            Spacer()
+                            Button(role: .destructive) {
+                                library.removeItem(id: app.id) // top-level removeItem; if nested we need a tree removal
+                                detachIfNeeded(app.id)
+                            } label: { Image(systemName: "minus.circle") }
+                                .buttonStyle(.borderless)
+                        }
+                        .padding(.vertical, 3)
+                        .padding(.leading, 36)
+                        .padding(.trailing, 6)
+                        .contentShape(Rectangle())
+                        .onDrag { NSItemProvider(object: app.id.uuidString as NSString) }
+                    }
+                }
+            }
+        }
+    }
+
+    private func renamableName(_ folder: FolderEntry) -> some View {
+        TextField("Folder name", text: Binding(
+            get: { folder.name },
+            set: { library.renameFolder(folder.id, to: $0) }
+        ))
+        .textFieldStyle(.plain)
+        .font(.body.weight(.medium))
+    }
+
+    private var topLevelDropRow: some View {
+        HStack {
+            Image(systemName: "arrow.up.left.and.arrow.down.right")
+            Text("Drop here to move to top level")
+                .font(.caption)
+                .foregroundStyle(.secondary)
+            Spacer()
+        }
+        .padding(.vertical, 8)
+        .padding(.horizontal, 8)
+        .frame(maxWidth: .infinity)
+        .background(
+            RoundedRectangle(cornerRadius: 6, style: .continuous)
+                .fill(topLevelDropHover ? Color.accentColor.opacity(0.25) : Color.primary.opacity(0.03))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 6, style: .continuous)
+                        .strokeBorder(style: StrokeStyle(lineWidth: 1, dash: [4]))
+                        .foregroundStyle(Color.primary.opacity(0.25))
+                )
+        )
+        .padding(.top, 6)
+        .onDrop(of: [.text], isTargeted: $topLevelDropHover) { providers in
+            handleDrop(providers: providers, intoFolder: nil)
+        }
+    }
+
+    // MARK: drag/drop handlers
+
+    private func handleDrop(providers: [NSItemProvider], intoFolder folderID: UUID?) -> Bool {
+        guard let provider = providers.first else { return false }
+        _ = provider.loadObject(ofClass: NSString.self) { reading, _ in
+            guard let s = reading as? String, let id = UUID(uuidString: s) else { return }
+            DispatchQueue.main.async {
+                if let folderID {
+                    library.moveApp(id, intoFolder: folderID)
+                } else {
+                    library.moveAppToTopLevel(id)
+                }
+            }
+        }
+        return true
+    }
+
+    /// Removing an app nested inside a folder: AppLibrary.removeItem only
+    /// removes top-level entries, so additionally clean up inside folders.
+    private func detachIfNeeded(_ appID: UUID) {
+        for i in 0..<library.items.count {
+            if case .folder(var f) = library.items[i],
+               let ai = f.apps.firstIndex(where: { $0.id == appID }) {
+                f.apps.remove(at: ai)
+                if f.apps.isEmpty {
+                    library.items.remove(at: i)
+                } else {
+                    library.items[i] = .folder(f)
+                }
+                return
+            }
+        }
+    }
+}

@@ -1,0 +1,658 @@
+import SwiftUI
+import AppKit
+
+final class DockWindowController: NSWindowController, NSWindowDelegate {
+    private var prefsObserver: NSObjectProtocol?
+    private var snapWorkItem: DispatchWorkItem?
+
+    convenience init() {
+        let content = DockView()
+            .environmentObject(AppLibrary.shared)
+            .environmentObject(Preferences.shared)
+        let host = NSHostingController(rootView: content)
+
+        let win = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 800, height: 130),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        win.backgroundColor = .clear
+        win.isOpaque = false
+        win.hasShadow = true
+        win.level = .floating
+        win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        win.contentViewController = host
+
+        self.init(window: win)
+        win.delegate = self
+        applyLayout()
+        prefsObserver = NotificationCenter.default.addObserver(
+            forName: Preferences.changed, object: nil, queue: .main
+        ) { [weak self] _ in self?.applyLayout() }
+    }
+
+    /// Compute the proper window size and origin for the configured edge.
+    func applyLayout() {
+        guard let win = window, let screen = (NSScreen.main ?? win.screen) else { return }
+        let edge = Preferences.shared.edge
+        let isEditing = Preferences.shared.isEditingLayout
+        win.isMovableByWindowBackground = isEditing
+        win.isMovable = isEditing
+
+        let prefs = Preferences.shared
+        // Flush-bottom is honored regardless of the configured edge — when on,
+        // we lock the dock to the absolute screen bottom (below the visible-frame
+        // inset on most setups, which is fine because the system Dock is hidden).
+        let useFlush = prefs.flushBottom && edge == .bottom
+        let area: NSRect = useFlush ? screen.frame : screen.visibleFrame
+
+        let mt = CGFloat(prefs.marginTop), mb = CGFloat(prefs.marginBottom)
+        let ml = CGFloat(prefs.marginLeft), mr = CGFloat(prefs.marginRight)
+
+        let count = max(1, AppLibrary.shared.items.count)
+        let iconSize = CGFloat(prefs.iconSize)
+        let spacing = CGFloat(prefs.spacing)
+        let padding: CGFloat = 18 * 2 + 14 * 2 + 16
+        let totalIcons = CGFloat(count) * iconSize + CGFloat(max(0, count - 1)) * spacing
+        let magnified = prefs.magnifyOnHover ? CGFloat(prefs.magnifySize) : iconSize
+        let thickness: CGFloat = magnified + 60
+
+        let frame: NSRect
+        switch edge {
+        case .bottom:
+            let avail = max(220, area.width - ml - mr)
+            let length = min(max(totalIcons + padding, 220), avail)
+            let regionMid = (area.minX + ml + area.maxX - mr) / 2
+            // Bottom margin always controls vertical offset. When flush, we just
+            // use the full screen frame (so the dock can extend below the menu-bar-
+            // reserved bottom strip) and the bottom corners square off in DockView.
+            let y = area.minY + mb
+            frame = NSRect(x: regionMid - length / 2, y: y, width: length, height: thickness)
+        case .top:
+            let avail = max(220, area.width - ml - mr)
+            let length = min(max(totalIcons + padding, 220), avail)
+            let regionMid = (area.minX + ml + area.maxX - mr) / 2
+            frame = NSRect(x: regionMid - length / 2, y: area.maxY - thickness - mt, width: length, height: thickness)
+        case .left:
+            let avail = max(220, area.height - mt - mb)
+            let length = min(max(totalIcons + padding, 220), avail)
+            let regionMid = (area.minY + mb + area.maxY - mt) / 2
+            frame = NSRect(x: area.minX + ml, y: regionMid - length / 2, width: thickness, height: length)
+        case .right:
+            let avail = max(220, area.height - mt - mb)
+            let length = min(max(totalIcons + padding, 220), avail)
+            let regionMid = (area.minY + mb + area.maxY - mt) / 2
+            frame = NSRect(x: area.maxX - thickness - mr, y: regionMid - length / 2, width: thickness, height: length)
+        }
+        win.setFrame(frame, display: true, animate: false)
+    }
+
+    // Live snap-to-nearest-edge while dragging in edit mode.
+    func windowDidMove(_ notification: Notification) {
+        guard Preferences.shared.isEditingLayout, let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        snapWorkItem?.cancel()
+        let work = DispatchWorkItem { [weak self] in
+            guard let self = self else { return }
+            let vf = screen.visibleFrame
+            let f = win.frame
+            let center = NSPoint(x: f.midX, y: f.midY)
+            let dBottom = abs(center.y - vf.minY)
+            let dTop = abs(vf.maxY - center.y)
+            let dLeft = abs(center.x - vf.minX)
+            let dRight = abs(vf.maxX - center.x)
+            let minDist = min(dBottom, dTop, dLeft, dRight)
+            let newEdge: Preferences.Edge =
+                minDist == dBottom ? .bottom :
+                minDist == dTop ? .top :
+                minDist == dLeft ? .left : .right
+            if newEdge != Preferences.shared.edge {
+                Preferences.shared.edge = newEdge // triggers applyLayout via observer
+            } else {
+                self.applyLayout()
+            }
+        }
+        snapWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+}
+
+// MARK: - DockView
+
+struct DockView: View {
+    @EnvironmentObject var library: AppLibrary
+    @EnvironmentObject var prefs: Preferences
+    @StateObject private var dragState = DragState()
+    @State private var hoverPoint: CGPoint? = nil
+
+    private var iconSize: CGFloat { CGFloat(prefs.iconSize) }
+    private var spacing: CGFloat { CGFloat(prefs.spacing) }
+    private var magnifyMax: CGFloat { CGFloat(prefs.magnifySize) }
+
+    private var isVertical: Bool {
+        prefs.edge == .left || prefs.edge == .right
+    }
+
+    private var dockShape: UnevenRoundedRectangle {
+        let r = CGFloat(prefs.cornerRadius)
+        // When flushed against the screen bottom on the bottom edge, square off
+        // the corners that touch the screen.
+        let flushB = prefs.flushBottom && prefs.edge == .bottom
+        let topL: CGFloat = r
+        let topR: CGFloat = r
+        let botL: CGFloat = flushB ? 0 : r
+        let botR: CGFloat = flushB ? 0 : r
+        return UnevenRoundedRectangle(
+            topLeadingRadius: topL,
+            bottomLeadingRadius: botL,
+            bottomTrailingRadius: botR,
+            topTrailingRadius: topR,
+            style: .continuous
+        )
+    }
+
+    private var restingThickness: CGFloat { iconSize + 56 }
+
+    private var dockAlignment: Alignment {
+        switch prefs.edge {
+        case .bottom: return .bottom
+        case .top: return .top
+        case .left: return .leading
+        case .right: return .trailing
+        }
+    }
+
+    @ViewBuilder
+    private var dockChrome: some View {
+        let editing = prefs.isEditingLayout
+        let bd = prefs.borderColor
+        let bg = prefs.backgroundColor
+        let baseBorder = prefs.showBorder
+            ? Color(.sRGB, red: bd.r, green: bd.g, blue: bd.b, opacity: bd.a)
+            : Color.clear
+        let borderColor = editing ? Color.accentColor.opacity(0.9) : baseBorder
+        let borderWidth: CGFloat = editing ? 2 : CGFloat(prefs.borderWidth)
+
+        ZStack {
+            VisualEffectBlur(material: .popover, blendingMode: .behindWindow)
+                .clipShape(dockShape)
+            if prefs.tintBackground {
+                dockShape
+                    .fill(Color(.sRGB, red: bg.r, green: bg.g, blue: bg.b, opacity: bg.a))
+            }
+            dockShape
+                .strokeBorder(borderColor, lineWidth: borderWidth)
+        }
+    }
+
+    var body: some View {
+        ZStack(alignment: dockAlignment) {
+            dockChrome
+                .frame(
+                    width: isVertical ? restingThickness : nil,
+                    height: isVertical ? nil : restingThickness
+                )
+
+            Group {
+                if isVertical {
+                    VStack(spacing: spacing) { itemViews }
+                        .padding(.vertical, 18)
+                        .padding(.horizontal, 14)
+                } else {
+                    HStack(spacing: spacing) { itemViews }
+                        .padding(.horizontal, 18)
+                        .padding(.vertical, 14)
+                }
+            }
+        }
+        .padding(prefs.flushBottom && prefs.edge == .bottom ? 0 : 8)
+        .coordinateSpace(name: "dock")
+        .onContinuousHover(coordinateSpace: .named("dock")) { phase in
+            switch phase {
+            case .active(let p): hoverPoint = p
+            case .ended: hoverPoint = nil
+            }
+        }
+        .environmentObject(dragState)
+        .environment(\.dockHoverPoint, hoverPoint)
+        .environment(\.dockIsVertical, isVertical)
+        .environment(\.dockMagnifyEnabled, prefs.magnifyOnHover)
+        .environment(\.dockMagnifyMax, magnifyMax)
+    }
+
+    @ViewBuilder private var itemViews: some View {
+        ForEach(Array(library.items.enumerated()), id: \.element.id) { idx, item in
+            DockItemView(
+                item: item,
+                index: idx,
+                iconSize: iconSize,
+                spacing: spacing,
+                dragState: dragState
+            )
+        }
+    }
+}
+
+// MARK: - Magnification environment
+
+private struct DockHoverPointKey: EnvironmentKey { static let defaultValue: CGPoint? = nil }
+private struct DockIsVerticalKey: EnvironmentKey { static let defaultValue: Bool = false }
+private struct DockMagnifyEnabledKey: EnvironmentKey { static let defaultValue: Bool = true }
+private struct DockMagnifyMaxKey: EnvironmentKey { static let defaultValue: CGFloat = 110 }
+
+extension EnvironmentValues {
+    var dockHoverPoint: CGPoint? {
+        get { self[DockHoverPointKey.self] }
+        set { self[DockHoverPointKey.self] = newValue }
+    }
+    var dockIsVertical: Bool {
+        get { self[DockIsVerticalKey.self] }
+        set { self[DockIsVerticalKey.self] = newValue }
+    }
+    var dockMagnifyEnabled: Bool {
+        get { self[DockMagnifyEnabledKey.self] }
+        set { self[DockMagnifyEnabledKey.self] = newValue }
+    }
+    var dockMagnifyMax: CGFloat {
+        get { self[DockMagnifyMaxKey.self] }
+        set { self[DockMagnifyMaxKey.self] = newValue }
+    }
+}
+
+// MARK: - Drag State
+
+final class DragState: ObservableObject {
+    @Published var draggingID: UUID? = nil
+    @Published var dragOffset: CGSize = .zero
+    @Published var hoverTargetID: UUID? = nil
+    @Published var hoverStarted: Date? = nil
+    @Published var wiggle: Bool = false
+    @Published var folderForming: UUID? = nil // target id when threshold reached
+    /// timestamp when first hover began (for the *current* hover target)
+    var hoverTimer: Timer?
+
+    func cancelHoverTimer() {
+        hoverTimer?.invalidate()
+        hoverTimer = nil
+    }
+}
+
+// MARK: - DockItemView
+
+struct DockItemView: View {
+    let item: DockItem
+    let index: Int
+    let iconSize: CGFloat
+    let spacing: CGFloat
+    @ObservedObject var dragState: DragState
+    @EnvironmentObject var library: AppLibrary
+
+    @State private var frameInDock: CGRect = .zero
+    @State private var showFolderPopover: Bool = false
+    @State private var folderFormProgress: CGFloat = 0
+    @EnvironmentObject var prefs: Preferences
+    @Environment(\.dockHoverPoint) private var hoverPoint
+    @Environment(\.dockIsVertical) private var isVertical
+    @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
+    @Environment(\.dockMagnifyMax) private var magnifyMax
+
+    private var magnificationScale: CGFloat {
+        guard magnifyEnabled, let hp = hoverPoint, frameInDock != .zero else { return 1 }
+        let center = isVertical ? frameInDock.midY : frameInDock.midX
+        let mouse = isVertical ? hp.y : hp.x
+        let dist = abs(mouse - center)
+        // Falloff over ~2.5x the icon size
+        let sigma = iconSize * 1.6
+        let g = exp(-(dist * dist) / (2 * sigma * sigma))
+        let maxScale = max(1.0, magnifyMax / iconSize)
+        return 1 + (maxScale - 1) * g
+    }
+
+    var body: some View {
+        let isDragging = dragState.draggingID == item.id
+        let isHoverTarget = dragState.hoverTargetID == item.id
+        let isFormingFolder = dragState.folderForming == item.id
+        let magScale = magnificationScale
+
+        VStack(spacing: 4) {
+            if prefs.labelMode == .above {
+                labelText
+            }
+            ZStack {
+                // Folder formation halo
+                if isHoverTarget && !isDragging {
+                    RoundedRectangle(cornerRadius: 18, style: .continuous)
+                        .fill(Color.primary.opacity(0.15))
+                        .frame(width: iconSize + 16, height: iconSize + 16)
+                        .scaleEffect(isFormingFolder ? 1.15 : 1.0)
+                        .animation(.spring(response: 0.4, dampingFraction: 0.6), value: isFormingFolder)
+                }
+
+                // Fixed-size layout cell, sized to the resting icon size, so the
+                // dock width never changes as icons magnify.
+                Color.clear
+                    .frame(width: iconSize, height: iconSize)
+                    .overlay(alignment: isVertical ? .leading : .bottom) {
+                        // The actual image is sized at the current displayed size
+                        // (iconSize * scale) and re-rasterized cleanly each frame,
+                        // avoiding the blur you get from .scaleEffect upscaling.
+                        let scale = isDragging ? max(1.1, magScale) : (isHoverTarget ? 0.92 : magScale)
+                        let displaySize = iconSize * scale
+                        iconContent
+                            .frame(width: displaySize, height: displaySize)
+                            .opacity(isDragging ? 0.85 : 1.0)
+                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
+                    }
+            }
+            .background(
+                GeometryReader { proxy -> Color in
+                    let f = proxy.frame(in: .named("dock"))
+                    DispatchQueue.main.async {
+                        self.frameInDock = f
+                        ItemFrameRegistry.shared.frames[item.id] = f
+                    }
+                    return Color.clear
+                }
+            )
+            // iOS-style wiggle when in edit mode
+            .modifier(WiggleModifier(active: dragState.wiggle && !isDragging))
+            .offset(isDragging ? dragState.dragOffset : .zero)
+
+            if prefs.labelMode == .below {
+                labelText
+            }
+        }
+        .help(prefs.labelMode == .tooltip ? label : "")
+        .coordinateSpace(name: "item-\(item.id)")
+        .gesture(
+            DragGesture(coordinateSpace: .named("dock"))
+                .onChanged { value in
+                    if dragState.draggingID != item.id {
+                        dragState.draggingID = item.id
+                    }
+                    dragState.dragOffset = CGSize(
+                        width: value.translation.width,
+                        height: value.translation.height
+                    )
+                    updateHoverTarget(dragLocation: value.location)
+                }
+                .onEnded { value in
+                    finishDrag(at: value.location)
+                }
+        )
+        .onTapGesture {
+            if dragState.wiggle {
+                // Exit edit mode on tap in empty-ish area; for now, tapping launches
+            }
+            switch item {
+            case .app(let a): library.launch(a)
+            case .folder: showFolderPopover.toggle()
+            }
+        }
+        .popover(isPresented: $showFolderPopover, arrowEdge: .top) {
+            if case .folder(let f) = item {
+                FolderPopover(folder: f)
+                    .environmentObject(library)
+            }
+        }
+    }
+
+    @ViewBuilder private var iconContent: some View {
+        switch item {
+        case .app(let a):
+            Image(nsImage: a.icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: iconSize, height: iconSize)
+        case .folder(let f):
+            FolderIconView(folder: f, size: iconSize)
+        }
+    }
+
+    private var labelText: some View {
+        Text(label)
+            .font(.system(size: 10))
+            .foregroundStyle(Color.primary)
+            .lineLimit(1)
+            .frame(maxWidth: iconSize + 16)
+    }
+
+    private var label: String {
+        switch item {
+        case .app(let a): return a.name
+        case .folder(let f): return f.name
+        }
+    }
+
+    // MARK: - Drag logic
+
+    private func updateHoverTarget(dragLocation: CGPoint) {
+        // dragLocation is in "dock" coordinate space.
+        // Find which OTHER item we are over.
+        guard let myFrame = currentItemFrame() else { return }
+
+        // The dragged finger location → adjusted by our own frame center + translation
+        let pointer = CGPoint(
+            x: myFrame.midX + dragState.dragOffset.width,
+            y: myFrame.midY + dragState.dragOffset.height
+        )
+
+        // Read all sibling frames via a centralized registry
+        let hovered = ItemFrameRegistry.shared.itemAt(point: pointer, excluding: item.id)
+        if hovered != dragState.hoverTargetID {
+            dragState.hoverTargetID = hovered
+            dragState.folderForming = nil
+            dragState.cancelHoverTimer()
+            if hovered != nil {
+                // Start the iOS "hold to enter edit mode + form folder" timer
+                let target = hovered
+                dragState.hoverTimer = Timer.scheduledTimer(withTimeInterval: 0.8, repeats: false) { _ in
+                    DispatchQueue.main.async {
+                        if dragState.hoverTargetID == target {
+                            withAnimation(.easeInOut(duration: 0.25)) {
+                                dragState.wiggle = true
+                                dragState.folderForming = target
+                            }
+                        }
+                    }
+                }
+            }
+        }
+    }
+
+    private func currentItemFrame() -> CGRect? {
+        ItemFrameRegistry.shared.frames[item.id]
+    }
+
+    private func finishDrag(at location: CGPoint) {
+        let target = dragState.hoverTargetID
+        let dragged = item.id
+
+        dragState.cancelHoverTimer()
+
+        // More forgiving rule: if there's a valid hover target at release time,
+        // create / merge into the folder regardless of whether the 0.8s "wiggle"
+        // threshold fired. iOS' real-world behavior is identical — pause + release
+        // works as readily as full edit-mode + release.
+        if let t = target, t != dragged {
+            // Run mutation OUTSIDE the spring animation block so SwiftUI doesn't
+            // try to animate the disappearance of the dragged view while the
+            // model index has already shifted; that's the chain of events that
+            // was producing "folder appears then disappears".
+            library.combine(dragged: dragged, into: t)
+        }
+
+        withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
+            dragState.draggingID = nil
+            dragState.dragOffset = .zero
+            dragState.hoverTargetID = nil
+            dragState.folderForming = nil
+        }
+
+        DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+            withAnimation { dragState.wiggle = false }
+        }
+    }
+}
+
+// Track item frames in dock coordinate space so we can hit-test the drag pointer.
+final class ItemFrameRegistry {
+    static let shared = ItemFrameRegistry()
+    var frames: [UUID: CGRect] = [:]
+
+    func itemAt(point: CGPoint, excluding: UUID) -> UUID? {
+        // Generous hit-test pad so the drop target is much less finicky.
+        for (id, frame) in frames where id != excluding {
+            if frame.insetBy(dx: -14, dy: -14).contains(point) { return id }
+        }
+        return nil
+    }
+}
+
+// MARK: - Wiggle
+
+struct WiggleModifier: ViewModifier {
+    let active: Bool
+    @State private var phase: Double = 0
+
+    func body(content: Content) -> some View {
+        content
+            .rotationEffect(.degrees(active ? sin(phase) * 3.0 : 0))
+            .onAppear {
+                guard active else { return }
+                withAnimation(.linear(duration: 0.16).repeatForever(autoreverses: false)) {
+                    phase = .pi * 2
+                }
+            }
+            .onChange(of: active) { newValue in
+                if newValue {
+                    withAnimation(.linear(duration: 0.16).repeatForever(autoreverses: false)) {
+                        phase = .pi * 2
+                    }
+                } else {
+                    withAnimation(.default) { phase = 0 }
+                }
+            }
+    }
+}
+
+// MARK: - Folder Icon
+
+struct FolderIconView: View {
+    let folder: FolderEntry
+    let size: CGFloat
+
+    var body: some View {
+        ZStack {
+            RoundedRectangle(cornerRadius: 14, style: .continuous)
+                .fill(Color.primary.opacity(0.18))
+                .overlay(
+                    RoundedRectangle(cornerRadius: 14, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.22), lineWidth: 0.5)
+                )
+
+            let grid = Array(folder.apps.prefix(9))
+            let cell = (size - 18) / 3
+            VStack(spacing: 3) {
+                ForEach(0..<3, id: \.self) { row in
+                    HStack(spacing: 3) {
+                        ForEach(0..<3, id: \.self) { col in
+                            let idx = row * 3 + col
+                            if idx < grid.count {
+                                Image(nsImage: grid[idx].icon)
+                                    .resizable()
+                                    .frame(width: cell, height: cell)
+                                    .cornerRadius(4)
+                            } else {
+                                Color.clear.frame(width: cell, height: cell)
+                            }
+                        }
+                    }
+                }
+            }
+            .padding(7)
+        }
+        .frame(width: size, height: size)
+    }
+}
+
+// MARK: - Folder popover
+
+struct FolderPopover: View {
+    let folder: FolderEntry
+    @EnvironmentObject var library: AppLibrary
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 10) {
+            Text(folder.name).font(.headline)
+            let cols = Array(repeating: GridItem(.fixed(64), spacing: 12), count: 4)
+            LazyVGrid(columns: cols, spacing: 14) {
+                ForEach(folder.apps) { app in
+                    VStack {
+                        Image(nsImage: app.icon).resizable().frame(width: 48, height: 48)
+                        Text(app.name).font(.system(size: 10)).lineLimit(1)
+                    }
+                    .onTapGesture { library.launch(app) }
+                }
+            }
+        }
+        .padding(16)
+        .frame(width: 340)
+    }
+}
+
+// MARK: - Visual Effect Blur
+
+// MARK: - Native tooltip helper
+
+/// Sets `toolTip` on an underlying NSView. SwiftUI's `.help()` doesn't reliably
+/// register the tooltip when the view is also part of complex gesture/transform
+/// hierarchies like our dock items.
+struct ToolTipView: NSViewRepresentable {
+    let text: String
+    func makeNSView(context: Context) -> NSView {
+        let v = NSView()
+        v.toolTip = text.isEmpty ? nil : text
+        return v
+    }
+    func updateNSView(_ nsView: NSView, context: Context) {
+        nsView.toolTip = text.isEmpty ? nil : text
+    }
+}
+
+extension View {
+    func nativeToolTip(_ text: String) -> some View {
+        background(ToolTipView(text: text).allowsHitTesting(false))
+    }
+}
+
+struct VisualEffectBlur: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = blendingMode
+        v.state = .active
+        return v
+    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+// MARK: - Registry-updating GeometryReader extension
+
+private struct FrameTracker: ViewModifier {
+    let id: UUID
+    func body(content: Content) -> some View {
+        content.background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear { ItemFrameRegistry.shared.frames[id] = proxy.frame(in: .named("dock")) }
+                    .onChange(of: proxy.frame(in: .named("dock"))) { new in
+                        ItemFrameRegistry.shared.frames[id] = new
+                    }
+            }
+        )
+    }
+}

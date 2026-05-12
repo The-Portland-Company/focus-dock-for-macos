@@ -1,0 +1,24 @@
+# Build artifacts
+build/
+DerivedData/
+*.xcodeproj/xcuserdata/
+*.xcworkspace/xcuserdata/
+
+# XcodeGen generates this — keep `project.yml` as the source of truth.
+FocusDock.xcodeproj/
+
+# macOS
+.DS_Store
+
+# Swift Package Manager
+.swiftpm/
+.build/
+Package.resolved
+
+# Editor
+.idea/
+.vscode/
+
+# Debug log
+dockdebug.log
+/tmp/dockdebug.log
