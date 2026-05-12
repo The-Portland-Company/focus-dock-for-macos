@@ -26,6 +26,8 @@ final class Preferences: ObservableObject {
     private let kShowBorder = "showBorder"
     private let kBorderColor = "borderColor"           // [r,g,b,a]
     private let kBorderWidth = "borderWidth"
+    private let kEdgeOffset = "edgeOffset"
+    private let kShowFinder = "showFinder"
 
     init() {
         if defaults.object(forKey: kDockIcon) == nil { defaults.set(true, forKey: kDockIcon) }
@@ -47,6 +49,17 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: kShowBorder) == nil { defaults.set(true, forKey: kShowBorder) }
         if defaults.object(forKey: kBorderColor) == nil { defaults.set([1.0, 1.0, 1.0, 0.12], forKey: kBorderColor) }
         if defaults.object(forKey: kBorderWidth) == nil { defaults.set(0.5, forKey: kBorderWidth) }
+        if defaults.object(forKey: kEdgeOffset) == nil { defaults.set(8.0, forKey: kEdgeOffset) }
+        if defaults.object(forKey: kShowFinder) == nil { defaults.set(true, forKey: kShowFinder) }
+        // Migrate older "margin" defaults to padding-appropriate values on first
+        // launch with this build only.
+        if !defaults.bool(forKey: "didMigratePadding") {
+            defaults.set(14.0, forKey: kMarginTop)
+            defaults.set(14.0, forKey: kMarginBottom)
+            defaults.set(18.0, forKey: kMarginLeft)
+            defaults.set(18.0, forKey: kMarginRight)
+            defaults.set(true, forKey: "didMigratePadding")
+        }
         defaults.set(false, forKey: kEditing)
     }
 
@@ -75,19 +88,29 @@ final class Preferences: ObservableObject {
         case showDockIcon, showMenuBarIcon, edge, iconSize, spacing,
              magnifyOnHover, magnifySize, labelMode,
              marginTop, marginBottom, marginLeft, marginRight,
-             flushBottom, cornerRadius
+             flushBottom, cornerRadius,
+             tintBackground, backgroundColor, showBorder, borderColor, borderWidth,
+             edgeOffset, showFinder
     }
 
+    /// Plain-Any defaults for primitives; the RGBA ones are handled specially in `reset(_:)`.
     static let defaultValues: [Key: Any] = [
         .showDockIcon: true, .showMenuBarIcon: true, .edge: "bottom",
         .iconSize: 64.0, .spacing: 14.0,
         .magnifyOnHover: true, .magnifySize: 110.0,
         .labelMode: "tooltip",
-        .marginTop: 8.0, .marginBottom: 8.0, .marginLeft: 20.0, .marginRight: 20.0,
-        .flushBottom: false, .cornerRadius: 24.0
+        .marginTop: 14.0, .marginBottom: 14.0, .marginLeft: 18.0, .marginRight: 18.0,
+        .flushBottom: false, .cornerRadius: 24.0,
+        .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
+        .edgeOffset: 8.0, .showFinder: true
     ]
 
     func reset(_ key: Key) {
+        switch key {
+        case .backgroundColor: backgroundColor = RGBA(0, 0, 0, 0); return
+        case .borderColor: borderColor = RGBA(1, 1, 1, 0.12); return
+        default: break
+        }
         guard let value = Self.defaultValues[key] else { return }
         defaults.set(value, forKey: key.rawValue)
         _tick &+= 1
@@ -100,9 +123,26 @@ final class Preferences: ObservableObject {
                 defaults.set(value, forKey: key.rawValue)
             }
         }
+        backgroundColor = RGBA(0, 0, 0, 0)
+        borderColor = RGBA(1, 1, 1, 0.12)
         _tick &+= 1
         NotificationCenter.default.post(name: Self.changed, object: nil)
     }
+
+    var edgeOffset: Double {
+        get { defaults.double(forKey: kEdgeOffset) }
+        set { defaults.set(newValue, forKey: kEdgeOffset); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+    var showFinder: Bool {
+        get { defaults.bool(forKey: kShowFinder) }
+        set { defaults.set(newValue, forKey: kShowFinder); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+
+    // Padding (semantic renames over marginTop/etc — internal dock padding around icons)
+    var paddingTop: Double { get { marginTop } set { marginTop = newValue } }
+    var paddingBottom: Double { get { marginBottom } set { marginBottom = newValue } }
+    var paddingLeft: Double { get { marginLeft } set { marginLeft = newValue } }
+    var paddingRight: Double { get { marginRight } set { marginRight = newValue } }
 
     enum Edge: String { case bottom, left, right, top }
     enum LabelMode: String, CaseIterable, Identifiable {

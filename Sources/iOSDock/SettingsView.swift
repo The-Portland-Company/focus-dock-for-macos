@@ -18,22 +18,55 @@ struct SettingsView: View {
     }()
 
     var body: some View {
-        TabView(selection: $selection) {
-            aboutTab
-                .tabItem { Label("About", systemImage: "info.circle") }
-                .tag(SettingsTab.about)
-            generalTab
-                .tabItem { Label("General", systemImage: "gearshape") }
-                .tag(SettingsTab.general)
-            appsTab
-                .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
-                .tag(SettingsTab.apps)
+        VStack(spacing: 0) {
+            systemSettingsLink
+                .padding(.horizontal, 12)
+                .padding(.top, 8)
+            TabView(selection: $selection) {
+                aboutTab
+                    .tabItem { Label("About", systemImage: "info.circle") }
+                    .tag(SettingsTab.about)
+                generalTab
+                    .tabItem { Label("General", systemImage: "gearshape") }
+                    .tag(SettingsTab.general)
+                appsTab
+                    .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
+                    .tag(SettingsTab.apps)
+            }
+            .padding()
         }
-        .frame(width: 540, height: 480)
-        .padding()
+        .frame(width: 540, height: 520)
         .onAppear {
             UserDefaults.standard.set(true, forKey: "hasSeenSettings")
         }
+    }
+
+    private var systemSettingsLink: some View {
+        Button {
+            // Opens System Settings → Desktop & Dock (macOS 13+).
+            if let url = URL(string: "x-apple.systempreferences:com.apple.preference.dock") {
+                NSWorkspace.shared.open(url)
+            }
+        } label: {
+            HStack(spacing: 8) {
+                Image(systemName: "macwindow")
+                Text("Open macOS System Settings → Desktop & Dock").font(.callout)
+                Spacer()
+                Image(systemName: "arrow.up.right.square")
+            }
+            .padding(.vertical, 8)
+            .padding(.horizontal, 12)
+            .background(
+                RoundedRectangle(cornerRadius: 8, style: .continuous)
+                    .fill(Color.accentColor.opacity(0.12))
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 8, style: .continuous)
+                            .strokeBorder(Color.accentColor.opacity(0.35), lineWidth: 0.5)
+                    )
+            )
+        }
+        .buttonStyle(.plain)
+        .help("Open the native Desktop & Dock pane in System Settings")
     }
 
     // MARK: - About
@@ -306,21 +339,25 @@ struct SettingsView: View {
                     }
                 }
             }
-            Section("Margins (screen edges)") {
-                settingRow(.marginTop) { marginSlider("Top", value: Binding(get: { prefs.marginTop }, set: { prefs.marginTop = $0 })) }
-                settingRow(.marginBottom) { marginSlider("Bottom", value: Binding(get: { prefs.marginBottom }, set: { prefs.marginBottom = $0 })) }
-                settingRow(.marginLeft) { marginSlider("Left", value: Binding(get: { prefs.marginLeft }, set: { prefs.marginLeft = $0 })) }
-                settingRow(.marginRight) { marginSlider("Right", value: Binding(get: { prefs.marginRight }, set: { prefs.marginRight = $0 })) }
+            Section("Padding (inside dock)") {
+                settingRow(.marginTop) { marginSlider("Top", value: Binding(get: { prefs.paddingTop }, set: { prefs.paddingTop = $0 })) }
+                settingRow(.marginBottom) { marginSlider("Bottom", value: Binding(get: { prefs.paddingBottom }, set: { prefs.paddingBottom = $0 })) }
+                settingRow(.marginLeft) { marginSlider("Left", value: Binding(get: { prefs.paddingLeft }, set: { prefs.paddingLeft = $0 })) }
+                settingRow(.marginRight) { marginSlider("Right", value: Binding(get: { prefs.paddingRight }, set: { prefs.paddingRight = $0 })) }
             }
             Section("Dock Background") {
-                Toggle("Tint the dock background (over the blur)", isOn: Binding(
-                    get: { prefs.tintBackground },
-                    set: { prefs.tintBackground = $0 }
-                ))
+                settingRow(.tintBackground) {
+                    Toggle("Tint the dock background (over the blur)", isOn: Binding(
+                        get: { prefs.tintBackground },
+                        set: { prefs.tintBackground = $0 }
+                    ))
+                }
                 if prefs.tintBackground {
-                    ColorPicker("Background color & opacity",
-                                selection: rgbaBinding(\.backgroundColor),
-                                supportsOpacity: true)
+                    settingRow(.backgroundColor) {
+                        ColorPicker("Background color & opacity",
+                                    selection: rgbaBinding(\.backgroundColor),
+                                    supportsOpacity: true)
+                    }
                 }
                 HStack {
                     Spacer()
@@ -328,21 +365,27 @@ struct SettingsView: View {
                 }
             }
             Section("Dock Border") {
-                Toggle("Show border", isOn: Binding(
-                    get: { prefs.showBorder },
-                    set: { prefs.showBorder = $0 }
-                ))
+                settingRow(.showBorder) {
+                    Toggle("Show border", isOn: Binding(
+                        get: { prefs.showBorder },
+                        set: { prefs.showBorder = $0 }
+                    ))
+                }
                 if prefs.showBorder {
-                    ColorPicker("Border color & opacity",
-                                selection: rgbaBinding(\.borderColor),
-                                supportsOpacity: true)
-                    HStack {
-                        Text("Border width")
-                        Slider(value: Binding(
-                            get: { prefs.borderWidth },
-                            set: { prefs.borderWidth = $0 }
-                        ), in: 0...6, step: 0.5)
-                        Text(String(format: "%.1f pt", prefs.borderWidth)).monospacedDigit().frame(width: 56, alignment: .trailing)
+                    settingRow(.borderColor) {
+                        ColorPicker("Border color & opacity",
+                                    selection: rgbaBinding(\.borderColor),
+                                    supportsOpacity: true)
+                    }
+                    settingRow(.borderWidth) {
+                        HStack {
+                            Text("Border width")
+                            Slider(value: Binding(
+                                get: { prefs.borderWidth },
+                                set: { prefs.borderWidth = $0 }
+                            ), in: 0...6, step: 0.5)
+                            Text(String(format: "%.1f pt", prefs.borderWidth)).monospacedDigit().frame(width: 56, alignment: .trailing)
+                        }
                     }
                 }
                 HStack {
@@ -381,6 +424,22 @@ struct SettingsView: View {
                         Text("Right").tag(Preferences.Edge.right)
                         Text("Top").tag(Preferences.Edge.top)
                     }
+                }
+                settingRow(.edgeOffset) {
+                    HStack {
+                        Text("Edge offset")
+                        Slider(value: Binding(
+                            get: { prefs.edgeOffset },
+                            set: { prefs.edgeOffset = $0 }
+                        ), in: 0...80, step: 1)
+                        Text("\(Int(prefs.edgeOffset)) pt").monospacedDigit().frame(width: 56, alignment: .trailing)
+                    }
+                }
+                settingRow(.showFinder) {
+                    Toggle("Show Finder as the first icon", isOn: Binding(
+                        get: { prefs.showFinder },
+                        set: { prefs.showFinder = $0 }
+                    ))
                 }
                 Toggle("Edit Layout (drag the dock to any edge to snap)", isOn: Binding(
                     get: { prefs.isEditingLayout },

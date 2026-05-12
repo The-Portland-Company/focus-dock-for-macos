@@ -41,49 +41,50 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         win.isMovable = isEditing
 
         let prefs = Preferences.shared
-        // Flush-bottom is honored regardless of the configured edge — when on,
-        // we lock the dock to the absolute screen bottom (below the visible-frame
-        // inset on most setups, which is fine because the system Dock is hidden).
+        // Flush sits the dock against the absolute screen edge — uses full
+        // screen.frame and ignores edgeOffset on that edge.
         let useFlush = prefs.flushBottom && edge == .bottom
         let area: NSRect = useFlush ? screen.frame : screen.visibleFrame
 
-        let mt = CGFloat(prefs.marginTop), mb = CGFloat(prefs.marginBottom)
-        let ml = CGFloat(prefs.marginLeft), mr = CGFloat(prefs.marginRight)
+        let pt = CGFloat(prefs.paddingTop), pb = CGFloat(prefs.paddingBottom)
+        let pl = CGFloat(prefs.paddingLeft), pr = CGFloat(prefs.paddingRight)
+        let offset = CGFloat(prefs.edgeOffset)
 
-        let count = max(1, AppLibrary.shared.items.count)
+        let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0))
         let iconSize = CGFloat(prefs.iconSize)
         let spacing = CGFloat(prefs.spacing)
-        let padding: CGFloat = 18 * 2 + 14 * 2 + 16
         let totalIcons = CGFloat(count) * iconSize + CGFloat(max(0, count - 1)) * spacing
         let magnified = prefs.magnifyOnHover ? CGFloat(prefs.magnifySize) : iconSize
-        let thickness: CGFloat = magnified + 60
 
+        // Window thickness must accommodate magnified icons + perpendicular padding.
+        // Internal padding is applied INSIDE the dock by DockView itself.
+        let thicknessHorizontal = max(magnified, iconSize) + pt + pb + 8
+        let thicknessVertical = max(magnified, iconSize) + pl + pr + 8
+
+        let screenBuffer: CGFloat = 16
         let frame: NSRect
         switch edge {
         case .bottom:
-            let avail = max(220, area.width - ml - mr)
-            let length = min(max(totalIcons + padding, 220), avail)
-            let regionMid = (area.minX + ml + area.maxX - mr) / 2
-            // Bottom margin always controls vertical offset. When flush, we just
-            // use the full screen frame (so the dock can extend below the menu-bar-
-            // reserved bottom strip) and the bottom corners square off in DockView.
-            let y = area.minY + mb
-            frame = NSRect(x: regionMid - length / 2, y: y, width: length, height: thickness)
+            let desired = totalIcons + pl + pr
+            let maxLen = area.width - screenBuffer
+            let length = min(max(desired, 240), maxLen)
+            let y = useFlush ? area.minY : area.minY + offset
+            frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal)
         case .top:
-            let avail = max(220, area.width - ml - mr)
-            let length = min(max(totalIcons + padding, 220), avail)
-            let regionMid = (area.minX + ml + area.maxX - mr) / 2
-            frame = NSRect(x: regionMid - length / 2, y: area.maxY - thickness - mt, width: length, height: thickness)
+            let desired = totalIcons + pl + pr
+            let maxLen = area.width - screenBuffer
+            let length = min(max(desired, 240), maxLen)
+            frame = NSRect(x: area.midX - length / 2, y: area.maxY - thicknessHorizontal - offset, width: length, height: thicknessHorizontal)
         case .left:
-            let avail = max(220, area.height - mt - mb)
-            let length = min(max(totalIcons + padding, 220), avail)
-            let regionMid = (area.minY + mb + area.maxY - mt) / 2
-            frame = NSRect(x: area.minX + ml, y: regionMid - length / 2, width: thickness, height: length)
+            let desired = totalIcons + pt + pb
+            let maxLen = area.height - screenBuffer
+            let length = min(max(desired, 240), maxLen)
+            frame = NSRect(x: area.minX + offset, y: area.midY - length / 2, width: thicknessVertical, height: length)
         case .right:
-            let avail = max(220, area.height - mt - mb)
-            let length = min(max(totalIcons + padding, 220), avail)
-            let regionMid = (area.minY + mb + area.maxY - mt) / 2
-            frame = NSRect(x: area.maxX - thickness - mr, y: regionMid - length / 2, width: thickness, height: length)
+            let desired = totalIcons + pt + pb
+            let maxLen = area.height - screenBuffer
+            let length = min(max(desired, 240), maxLen)
+            frame = NSRect(x: area.maxX - thicknessVertical - offset, y: area.midY - length / 2, width: thicknessVertical, height: length)
         }
         win.setFrame(frame, display: true, animate: false)
     }
@@ -151,7 +152,26 @@ struct DockView: View {
         )
     }
 
-    private var restingThickness: CGFloat { iconSize + 56 }
+    private var restingThickness: CGFloat {
+        // Internal padding + resting icon size.
+        iconSize + CGFloat(isVertical ? prefs.paddingLeft + prefs.paddingRight : prefs.paddingTop + prefs.paddingBottom) + 8
+    }
+
+    /// All items rendered in the dock, optionally prepended by a virtual Finder item.
+    private var renderedItems: [DockItem] {
+        guard prefs.showFinder else { return library.items }
+        let finder = AppEntry(path: "/System/Library/CoreServices/Finder.app", name: "Finder")
+        return [.app(finder)] + library.items
+    }
+
+    /// Effective per-icon scale to fit content within the dock window length.
+    private func effectiveScale(in available: CGFloat) -> CGFloat {
+        let n = max(1, renderedItems.count)
+        let interior = max(0, available - CGFloat(isVertical ? prefs.paddingTop + prefs.paddingBottom : prefs.paddingLeft + prefs.paddingRight))
+        let desired = CGFloat(n) * iconSize + CGFloat(max(0, n - 1)) * spacing
+        if desired <= interior { return 1 }
+        return max(0.4, interior / desired)
+    }
 
     private var dockAlignment: Alignment {
         switch prefs.edge {
@@ -186,24 +206,32 @@ struct DockView: View {
     }
 
     var body: some View {
-        ZStack(alignment: dockAlignment) {
-            dockChrome
-                .frame(
-                    width: isVertical ? restingThickness : nil,
-                    height: isVertical ? nil : restingThickness
-                )
+        GeometryReader { proxy in
+            let avail = isVertical ? proxy.size.height : proxy.size.width
+            let scale = effectiveScale(in: avail)
+            let scaledIcon = iconSize * scale
+            let scaledSpacing = spacing * scale
 
-            Group {
-                if isVertical {
-                    VStack(spacing: spacing) { itemViews }
-                        .padding(.vertical, 18)
-                        .padding(.horizontal, 14)
-                } else {
-                    HStack(spacing: spacing) { itemViews }
-                        .padding(.horizontal, 18)
-                        .padding(.vertical, 14)
+            ZStack(alignment: dockAlignment) {
+                dockChrome
+                    .frame(
+                        width: isVertical ? restingThickness : nil,
+                        height: isVertical ? nil : restingThickness
+                    )
+
+                Group {
+                    if isVertical {
+                        VStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
+                            .padding(.vertical, CGFloat(prefs.paddingTop))
+                            .padding(.horizontal, CGFloat(prefs.paddingLeft))
+                    } else {
+                        HStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
+                            .padding(.horizontal, CGFloat(prefs.paddingLeft))
+                            .padding(.vertical, CGFloat(prefs.paddingTop))
+                    }
                 }
             }
+            .frame(width: proxy.size.width, height: proxy.size.height)
         }
         .padding(prefs.flushBottom && prefs.edge == .bottom ? 0 : 8)
         .coordinateSpace(name: "dock")
@@ -220,8 +248,8 @@ struct DockView: View {
         .environment(\.dockMagnifyMax, magnifyMax)
     }
 
-    @ViewBuilder private var itemViews: some View {
-        ForEach(Array(library.items.enumerated()), id: \.element.id) { idx, item in
+    @ViewBuilder private func itemViews(iconSize: CGFloat, spacing: CGFloat) -> some View {
+        ForEach(Array(renderedItems.enumerated()), id: \.element.id) { idx, item in
             DockItemView(
                 item: item,
                 index: idx,
