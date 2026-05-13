@@ -233,9 +233,26 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                     win.minSize = NSSize(width: 480, height: 420)
                     win.maxSize = NSSize(width: CGFloat.greatestFiniteMagnitude,
                                          height: CGFloat.greatestFiniteMagnitude)
-                    if win.frameAutosaveName != "FocusDockSettingsWindow" {
-                        win.setFrameAutosaveName("FocusDockSettingsWindow")
-                        win.setFrameUsingName("FocusDockSettingsWindow")
+                    let autosaveName = "FocusDockSettingsWindow.v2"
+                    let defaultsKey = "NSWindow Frame \(autosaveName)"
+                    let hasSavedFrame = UserDefaults.standard.string(forKey: defaultsKey) != nil
+                    if win.frameAutosaveName != autosaveName {
+                        win.setFrameAutosaveName(autosaveName)
+                    }
+                    if hasSavedFrame {
+                        win.setFrameUsingName(autosaveName)
+                    } else {
+                        let target = NSSize(width: 520, height: 900)
+                        var frame = win.frame
+                        let screen = win.screen ?? NSScreen.main
+                        let visible = screen?.visibleFrame ?? frame
+                        let h = min(target.height, visible.height - 20)
+                        let w = min(target.width, visible.width - 20)
+                        let topY = frame.maxY
+                        frame.size = NSSize(width: w, height: h)
+                        frame.origin.y = topY - h
+                        win.setFrame(frame, display: true, animate: false)
+                        win.saveFrame(usingName: autosaveName)
                     }
                 }
             }
