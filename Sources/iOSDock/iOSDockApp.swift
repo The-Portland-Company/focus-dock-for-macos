@@ -53,6 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // silently no-ops until granted.
         BadgeMonitor.shared.start()
 
+        // Watch ~/.Trash so the dock's Trash icon swaps between empty/full
+        // bitmaps as items move in or out.
+        TrashWatcher.shared.start()
+
         // Deep-link from folder popover → open Settings.
         NotificationCenter.default.addObserver(
             forName: SettingsRouter.openFolder, object: nil, queue: .main
