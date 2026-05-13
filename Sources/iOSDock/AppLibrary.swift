@@ -55,9 +55,11 @@ final class IconCache {
             // distinct named images on modern macOS — both fall back to the
             // same generic icon. The canonical empty/full bin icons live in
             // CoreTypes.bundle (these are what Finder & the system Dock use).
-            let contents = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
-            let isEmpty = contents.filter { !$0.hasPrefix(".") }.isEmpty
-            let icns = isEmpty
+            //
+            // Emptiness state is maintained by `TrashWatcher` because
+            // ~/.Trash is TCC-protected — direct filesystem reads return
+            // EPERM without Full Disk Access.
+            let icns = AppLibrary.shared.trashIsEmpty
                 ? "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/TrashIcon.icns"
                 : "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/FullTrashIcon.icns"
             if let img = NSImage(contentsOfFile: icns) { return img }
@@ -97,10 +99,11 @@ final class AppLibrary: ObservableObject {
     /// `BadgeMonitor` on the main thread. Not persisted.
     @Published var badgeStates: [String: AppBadgeState] = [:]
 
-    /// Bumped by `TrashWatcher` whenever `~/.Trash` contents change, so
-    /// SwiftUI re-evaluates the (uncached) Trash icon and swaps between
-    /// the empty- and full-bin bitmaps.
-    @Published var trashTick: Int = 0
+    /// Set by `TrashWatcher` (which polls Finder via AppleScript, because
+    /// `~/.Trash` is TCC-protected and direct filesystem reads return EPERM).
+    /// `nil` means we haven't been able to determine state yet — treat as empty
+    /// for icon purposes.
+    @Published var trashIsEmpty: Bool = true
 
     func badgeState(for appName: String) -> AppBadgeState? {
         badgeStates[appName.lowercased()]
