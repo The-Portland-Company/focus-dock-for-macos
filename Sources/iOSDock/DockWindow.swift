@@ -46,7 +46,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         )
         win.backgroundColor = .clear
         win.isOpaque = false
-        win.hasShadow = false
+        win.hasShadow = true
         win.level = .floating
         win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         win.contentViewController = host
@@ -218,6 +218,59 @@ struct DockView: View {
         }
     }
 
+    /// Dock-panel shape with corners squared off on the edge that's flush to
+    /// the screen, so it matches the native Dock when Flush-with-Edge is on.
+    private var dockShape: UnevenRoundedRectangle {
+        let r = CGFloat(prefs.cornerRadius)
+        let flush = prefs.flushBottom
+        var topL: CGFloat = r, topR: CGFloat = r, botL: CGFloat = r, botR: CGFloat = r
+        if flush {
+            switch prefs.edge {
+            case .bottom: botL = 0; botR = 0
+            case .top:    topL = 0; topR = 0
+            case .left:   topL = 0; botL = 0
+            case .right:  topR = 0; botR = 0
+            }
+        }
+        return UnevenRoundedRectangle(
+            topLeadingRadius: topL,
+            bottomLeadingRadius: botL,
+            bottomTrailingRadius: botR,
+            topTrailingRadius: topR,
+            style: .continuous
+        )
+    }
+
+    /// Native-Dock-style chrome: behind-window blur, optional tint, hairline border.
+    @ViewBuilder
+    private var dockChrome: some View {
+        let editing = prefs.isEditingLayout
+        let bd = prefs.borderColor
+        let bg = prefs.backgroundColor
+        let baseBorder = prefs.showBorder
+            ? Color(.sRGB, red: bd.r, green: bd.g, blue: bd.b, opacity: bd.a)
+            : Color.clear
+        let borderColor = editing ? Color.accentColor.opacity(0.9) : baseBorder
+        let borderWidth: CGFloat = editing ? 2 : CGFloat(prefs.borderWidth)
+
+        ZStack {
+            VisualEffectBlur(material: .popover, blendingMode: .behindWindow)
+                .clipShape(dockShape)
+            if prefs.tintBackground {
+                dockShape
+                    .fill(Color(.sRGB, red: bg.r, green: bg.g, blue: bg.b, opacity: bg.a))
+            }
+            dockShape
+                .strokeBorder(borderColor, lineWidth: borderWidth)
+        }
+    }
+
+    /// Resting thickness of the dock panel — used to keep the chrome size
+    /// stable as icons magnify (only the icons grow, not the panel).
+    private var restingThickness: CGFloat {
+        iconSize + CGFloat(isVertical ? prefs.paddingLeft + prefs.paddingRight : prefs.paddingTop + prefs.paddingBottom) + 8
+    }
+
     /// Alignment opposite the dock edge — used to park transient UI (e.g. the
     /// edit-mode pill) in the magnification headroom so it never overlaps icons.
     private var oppositeAlignment: Alignment {
@@ -242,6 +295,14 @@ struct DockView: View {
             let scaledSpacing = prefs.fillWidth ? autoSpacing : spacing * scale
 
             ZStack(alignment: dockAlignment) {
+                // Native-Dock-style chrome sized to the resting thickness so it
+                // doesn't grow with icon magnification.
+                dockChrome
+                    .frame(
+                        width: isVertical ? restingThickness : nil,
+                        height: isVertical ? nil : restingThickness
+                    )
+
                 Group {
                     if isVertical {
                         VStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
@@ -863,4 +924,20 @@ private struct FrameTracker: ViewModifier {
             }
         )
     }
+}
+
+// MARK: - Visual Effect Blur
+
+struct VisualEffectBlur: NSViewRepresentable {
+    var material: NSVisualEffectView.Material
+    var blendingMode: NSVisualEffectView.BlendingMode
+
+    func makeNSView(context: Context) -> NSVisualEffectView {
+        let v = NSVisualEffectView()
+        v.material = material
+        v.blendingMode = blendingMode
+        v.state = .active
+        return v
+    }
+    func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
 }

@@ -379,15 +379,76 @@ struct SettingsView: View {
                     settingRow(.marginRight) { marginSlider("Right", value: Binding(get: { prefs.paddingRight }, set: { prefs.paddingRight = $0 })) }
                 }
             }
-            Section("Layout") {
+            Section("Dock Background") {
+                settingRow(.tintBackground) {
+                    Toggle("Tint the dock background (over the blur)", isOn: Binding(
+                        get: { prefs.tintBackground },
+                        set: { prefs.tintBackground = $0 }
+                    ))
+                }
+                if prefs.tintBackground {
+                    settingRow(.backgroundColor) {
+                        HStack {
+                            ColorPicker("Background color & opacity",
+                                        selection: rgbaBinding(\.backgroundColor),
+                                        supportsOpacity: true)
+                            colorPreviewSwatch(prefs.backgroundColor)
+                        }
+                    }
+                }
+            }
+            Section("Dock Border") {
+                settingRow(.showBorder) {
+                    Toggle("Show border", isOn: Binding(
+                        get: { prefs.showBorder },
+                        set: { prefs.showBorder = $0 }
+                    ))
+                }
+                if prefs.showBorder {
+                    settingRow(.borderColor) {
+                        HStack {
+                            ColorPicker("Border color & opacity",
+                                        selection: rgbaBinding(\.borderColor),
+                                        supportsOpacity: true)
+                            colorPreviewSwatch(prefs.borderColor)
+                        }
+                    }
+                    settingRow(.borderWidth) {
+                        HStack {
+                            Text("Border width")
+                            Slider(value: Binding(
+                                get: { prefs.borderWidth },
+                                set: { prefs.borderWidth = $0 }
+                            ), in: 0...6, step: 0.5)
+                            EditableNumber(value: Binding(
+                                get: { prefs.borderWidth },
+                                set: { prefs.borderWidth = $0 }
+                            ), suffix: "pt", precision: 1)
+                        }
+                    }
+                }
+            }
+            Section("Shape") {
                 settingRow(.flushBottom) {
                     Toggle("Flush with Edge", isOn: Binding(
                         get: { prefs.flushBottom },
                         set: { prefs.flushBottom = $0 }
                     ))
                 }
-                Text("When on, icons sit against whichever screen edge the dock is anchored to (ignoring the edge offset).")
+                Text("When on, the dock sits against whichever screen edge it's anchored to, and the corners on that edge are squared off.")
                     .font(.caption).foregroundStyle(.secondary)
+                settingRow(.cornerRadius) {
+                    HStack {
+                        Text("Corner radius")
+                        Slider(value: Binding(
+                            get: { prefs.cornerRadius },
+                            set: { prefs.cornerRadius = $0 }
+                        ), in: 0...40, step: 1)
+                        EditableNumber(value: Binding(get: { prefs.cornerRadius }, set: { prefs.cornerRadius = $0 }), suffix: "pt")
+                    }
+                }
+            }
+            Section("Layout") {
                 settingRow(.edge) {
                     Picker("Snap to edge", selection: Binding(
                         get: { prefs.edge },
@@ -531,12 +592,44 @@ struct SettingsView: View {
         .padding(.bottom, 8)
     }
 
+    /// Two-way bridge between SwiftUI `Color` (with opacity) and our RGBA struct.
+    private func rgbaBinding(_ keyPath: ReferenceWritableKeyPath<Preferences, Preferences.RGBA>) -> Binding<Color> {
+        Binding(
+            get: {
+                let v = prefs[keyPath: keyPath]
+                return Color(.sRGB, red: v.r, green: v.g, blue: v.b, opacity: v.a)
+            },
+            set: { newColor in
+                let ns = NSColor(newColor).usingColorSpace(.sRGB) ?? .black
+                prefs[keyPath: keyPath] = Preferences.RGBA(
+                    Double(ns.redComponent),
+                    Double(ns.greenComponent),
+                    Double(ns.blueComponent),
+                    Double(ns.alphaComponent)
+                )
+            }
+        )
+    }
+
     private func marginSlider(_ label: String, value: Binding<Double>) -> some View {
         HStack {
             Text(label).frame(width: 70, alignment: .leading)
             Slider(value: value, in: 0...80, step: 1)
             EditableNumber(value: value, suffix: "pt")
         }
+    }
+
+    private func colorPreviewSwatch(_ rgba: Preferences.RGBA) -> some View {
+        // Visualizes the chosen hue regardless of alpha, then overlays the
+        // actual color (with alpha) so users see both.
+        RoundedRectangle(cornerRadius: 4, style: .continuous)
+            .fill(Color(.sRGB, red: rgba.r, green: rgba.g, blue: rgba.b, opacity: 1))
+            .frame(width: 22, height: 22)
+            .overlay(
+                RoundedRectangle(cornerRadius: 4, style: .continuous)
+                    .strokeBorder(Color.primary.opacity(0.2), lineWidth: 0.5)
+            )
+            .help("Selected hue (ignoring opacity)")
     }
 }
 
