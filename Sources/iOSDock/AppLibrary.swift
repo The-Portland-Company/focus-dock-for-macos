@@ -53,17 +53,14 @@ final class IconCache {
         if path == trashPath {
             // AppKit doesn't actually publish "NSTrashEmpty"/"NSTrashFull" as
             // distinct named images on modern macOS — both fall back to the
-            // same generic icon. The Dock app ships the real bitmaps in its
-            // bundle, so read them straight from disk.
+            // same generic icon. The canonical empty/full bin icons live in
+            // CoreTypes.bundle (these are what Finder & the system Dock use).
             let contents = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
             let isEmpty = contents.filter { !$0.hasPrefix(".") }.isEmpty
-            let base = "/System/Library/CoreServices/Dock.app/Contents/Resources/"
-            let candidates: [String] = isEmpty
-                ? ["trashempty2@2x.png", "trashempty2.png", "trashempty@2x.png", "trashempty.png"]
-                : ["trashfull2@2x.png", "trashfull2.png", "trashfull@2x.png", "trashfull.png"]
-            for file in candidates {
-                if let img = NSImage(contentsOfFile: base + file) { return img }
-            }
+            let icns = isEmpty
+                ? "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/TrashIcon.icns"
+                : "/System/Library/CoreServices/CoreTypes.bundle/Contents/Resources/FullTrashIcon.icns"
+            if let img = NSImage(contentsOfFile: icns) { return img }
         }
         return NSWorkspace.shared.icon(forFile: path)
     }
