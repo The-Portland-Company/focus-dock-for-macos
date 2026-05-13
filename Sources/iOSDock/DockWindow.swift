@@ -864,8 +864,14 @@ struct DockItemView: View {
             withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
                 dragState.draggedOutside = outside
             }
+            if outside, !DockView.isReservedID(item.id), let img = draggedIconImage() {
+                DragPreviewPanel.shared.show(image: img, at: mouse)
+            } else if !outside {
+                DragPreviewPanel.shared.hide()
+            }
         }
         if outside {
+            DragPreviewPanel.shared.move(to: mouse)
             if dragState.hoverTargetID != nil {
                 dragState.hoverTargetID = nil
                 dragState.folderForming = nil
@@ -907,6 +913,13 @@ struct DockItemView: View {
         ItemFrameRegistry.shared.frames[item.id]
     }
 
+    private func draggedIconImage() -> NSImage? {
+        switch item {
+        case .app(let a): return a.icon
+        case .folder(let f): return f.apps.first?.icon
+        }
+    }
+
     private func finishDrag(at location: CGPoint) {
         let target = dragState.hoverTargetID
         let dragged = item.id
@@ -921,6 +934,7 @@ struct DockItemView: View {
         let isRemovableItem = !DockView.isReservedID(dragged)
         if droppedOutside && isRemovableItem {
             let releasePoint = NSEvent.mouseLocation
+            DragPreviewPanel.shared.hide()
             NSAnimationEffect.poof.show(
                 centeredAt: releasePoint,
                 size: NSSize(width: 64, height: 64),
@@ -950,6 +964,7 @@ struct DockItemView: View {
             library.combine(dragged: dragged, into: t)
         }
 
+        DragPreviewPanel.shared.hide()
         withAnimation(.spring(response: 0.45, dampingFraction: 0.75)) {
             dragState.draggingID = nil
             dragState.dragOffset = .zero
@@ -1307,6 +1322,65 @@ final class DockTooltipPanel {
 }
 
 // MARK: - Visual Effect Blur
+
+// MARK: - Drag Preview Panel
+
+/// Borderless floating panel that shows the dragged icon following the cursor
+/// while the user is dragging an item *outside* the dock. The dock's own
+/// NSPanel clips its content to its frame, so once the cursor leaves the dock
+/// the in-dock icon disappears. A separate panel here provides the native
+/// "icon attached to cursor" feel until release.
+final class DragPreviewPanel {
+    static let shared = DragPreviewPanel()
+    private var panel: NSPanel?
+    private var imageView: NSImageView?
+    private let size: CGFloat = 64
+
+    func show(image: NSImage, at screenPoint: CGPoint) {
+        ensurePanel()
+        guard let panel = panel, let imageView = imageView else { return }
+        imageView.image = image
+        let origin = NSPoint(x: screenPoint.x - size / 2, y: screenPoint.y - size / 2)
+        panel.setFrame(NSRect(origin: origin, size: NSSize(width: size, height: size)), display: true)
+        if !panel.isVisible { panel.orderFront(nil) }
+    }
+
+    func move(to screenPoint: CGPoint) {
+        guard let panel = panel, panel.isVisible else { return }
+        let origin = NSPoint(x: screenPoint.x - size / 2, y: screenPoint.y - size / 2)
+        panel.setFrameOrigin(origin)
+    }
+
+    func hide() {
+        panel?.orderOut(nil)
+        imageView?.image = nil
+    }
+
+    private func ensurePanel() {
+        if panel != nil { return }
+        let p = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: size, height: size),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        p.isFloatingPanel = true
+        p.level = .statusBar
+        p.backgroundColor = .clear
+        p.isOpaque = false
+        p.hasShadow = false
+        p.hidesOnDeactivate = false
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        p.ignoresMouseEvents = true
+        let iv = NSImageView(frame: p.contentView!.bounds)
+        iv.imageScaling = .scaleProportionallyUpOrDown
+        iv.autoresizingMask = [.width, .height]
+        iv.alphaValue = 0.95
+        p.contentView?.addSubview(iv)
+        panel = p
+        imageView = iv
+    }
+}
 
 struct VisualEffectBlur: NSViewRepresentable {
     var material: NSVisualEffectView.Material
