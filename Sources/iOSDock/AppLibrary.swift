@@ -51,9 +51,19 @@ final class IconCache {
     private func rawIcon(for path: String) -> NSImage {
         let trashPath = (NSHomeDirectory() as NSString).appendingPathComponent(".Trash")
         if path == trashPath {
-            let isEmpty = ((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).isEmpty
-            let name: NSImage.Name = isEmpty ? NSImage.Name("NSTrashEmpty") : NSImage.Name("NSTrashFull")
-            if let img = NSImage(named: name) { return img }
+            // AppKit doesn't actually publish "NSTrashEmpty"/"NSTrashFull" as
+            // distinct named images on modern macOS — both fall back to the
+            // same generic icon. The Dock app ships the real bitmaps in its
+            // bundle, so read them straight from disk.
+            let contents = (try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []
+            let isEmpty = contents.filter { !$0.hasPrefix(".") }.isEmpty
+            let base = "/System/Library/CoreServices/Dock.app/Contents/Resources/"
+            let candidates: [String] = isEmpty
+                ? ["trashempty@2x.png", "trashempty.png"]
+                : ["trashfull@2x.png", "trashfull.png"]
+            for file in candidates {
+                if let img = NSImage(contentsOfFile: base + file) { return img }
+            }
         }
         return NSWorkspace.shared.icon(forFile: path)
     }
