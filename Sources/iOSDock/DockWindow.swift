@@ -60,6 +60,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
 
         self.init(window: win)
         win.delegate = self
+        DockTooltipPanel.dockWindow = win
         applyLayout()
         prefsObserver = NotificationCenter.default.addObserver(
             forName: Preferences.changed, object: nil, queue: .main
@@ -220,6 +221,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     private func hide() {
         guard !isAutoHidden, let win = window, let screen = win.screen ?? NSScreen.main else { return }
         isAutoHidden = true
+        DockTooltipPanel.shared.hideAll()
         let target = hiddenFrame(from: shownFrame, edge: Preferences.shared.edge, on: screen)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
@@ -473,11 +475,13 @@ struct DockView: View {
                 } else {
                     hoverPoint = p
                 }
+                updateTooltipFor(point: p)
             case .ended:
                 // Animate the exit so icons spring back down smoothly.
                 withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
                     hoverPoint = nil
                 }
+                DockTooltipPanel.shared.hideAll()
             }
         }
         .environmentObject(dragState)
@@ -486,6 +490,39 @@ struct DockView: View {
         .environment(\.dockMagnifyEnabled, prefs.magnifyOnHover)
         .environment(\.dockMagnifyMax, magnifyMax)
         .environment(\.dockLeadingPad, CGFloat(isVertical ? prefs.effectivePaddingTop : prefs.effectivePaddingLeft))
+    }
+
+    /// Pick the item under the cursor (by frame in "dock" space) and show
+    /// a floating tooltip bubble for it. Driven from onContinuousHover at
+    /// the DockView level — the only hover hook that fires reliably for
+    /// a non-activating NSPanel.
+    private func updateTooltipFor(point: CGPoint) {
+        guard prefs.labelMode == .tooltip else {
+            DockTooltipPanel.shared.hideAll()
+            return
+        }
+        let pad: CGFloat = 14
+        var picked: (id: UUID, name: String)? = nil
+        let frames = ItemFrameRegistry.shared.frames
+        let items = renderedItems
+        for item in items {
+            if let f = frames[item.id], f.insetBy(dx: -pad, dy: -pad).contains(point) {
+                picked = (item.id, itemLabel(item))
+                break
+            }
+        }
+        if let p = picked {
+            DockTooltipPanel.shared.show(text: p.name, near: p.id, edge: prefs.edge)
+        } else {
+            DockTooltipPanel.shared.hideAll()
+        }
+    }
+
+    private func itemLabel(_ item: DockItem) -> String {
+        switch item {
+        case .app(let a): return a.name
+        case .folder(let f): return f.name
+        }
     }
 
     @ViewBuilder private func itemViews(iconSize: CGFloat, spacing: CGFloat) -> some View {
@@ -688,7 +725,6 @@ struct DockItemView: View {
                     .frame(width: 4, height: 4)
             }
         }
-        .nativeToolTip(prefs.labelMode == .tooltip ? label : "")
         .coordinateSpace(name: "item-\(item.id)")
         .gesture(
             DragGesture(coordinateSpace: .named("dock"))
@@ -1086,6 +1122,118 @@ private struct FrameTracker: ViewModifier {
                     }
             }
         )
+    }
+}
+
+// MARK: - Dock Tooltip Panel
+
+/// Floating panel that renders a label bubble outside the dock window — the
+/// dock's own NSPanel is sized to icon thickness, so a SwiftUI tooltip drawn
+/// inside it would be clipped. A separate borderless panel positioned along
+/// the outer edge of the dock matches the native macOS Dock's hover-label.
+final class DockTooltipPanel {
+    static let shared = DockTooltipPanel()
+    static weak var dockWindow: NSWindow?
+
+    private var panel: NSPanel?
+    private var label: NSTextField?
+    private var currentOwner: UUID?
+
+    func show(text: String, near id: UUID, edge: Preferences.Edge) {
+        guard !text.isEmpty,
+              let dockWin = Self.dockWindow,
+              let itemFrame = ItemFrameRegistry.shared.frames[id] else { return }
+        ensurePanel()
+        guard let panel = panel, let label = label else { return }
+
+        label.stringValue = text
+        label.sizeToFit()
+        let padH: CGFloat = 10
+        let padV: CGFloat = 5
+        let w = ceil(label.frame.width) + padH * 2
+        let h = ceil(label.frame.height) + padV * 2
+
+        let dockFrame = dockWin.frame
+        let contentHeight = dockWin.contentView?.bounds.height ?? dockFrame.height
+        let itemCenterScreenX = dockFrame.minX + itemFrame.midX
+        let itemCenterScreenY = dockFrame.minY + (contentHeight - itemFrame.midY)
+        let gap: CGFloat = 8
+
+        let x: CGFloat
+        let y: CGFloat
+        switch edge {
+        case .bottom:
+            x = itemCenterScreenX - w / 2
+            y = dockFrame.maxY + gap
+        case .top:
+            x = itemCenterScreenX - w / 2
+            y = dockFrame.minY - gap - h
+        case .left:
+            x = dockFrame.maxX + gap
+            y = itemCenterScreenY - h / 2
+        case .right:
+            x = dockFrame.minX - gap - w
+            y = itemCenterScreenY - h / 2
+        }
+
+        let frame = NSRect(x: x, y: y, width: w, height: h)
+        panel.setFrame(frame, display: true)
+        label.frame = NSRect(x: padH, y: padV, width: w - 2 * padH, height: h - 2 * padV)
+        currentOwner = id
+        if !panel.isVisible { panel.orderFront(nil) }
+    }
+
+    func hideIfOwner(_ id: UUID) {
+        guard currentOwner == id else { return }
+        currentOwner = nil
+        panel?.orderOut(nil)
+    }
+
+    func hideAll() {
+        currentOwner = nil
+        panel?.orderOut(nil)
+    }
+
+    private func ensurePanel() {
+        if panel != nil { return }
+        let p = NSPanel(
+            contentRect: NSRect(x: 0, y: 0, width: 100, height: 24),
+            styleMask: [.borderless, .nonactivatingPanel],
+            backing: .buffered,
+            defer: false
+        )
+        p.isFloatingPanel = true
+        p.level = .statusBar
+        p.backgroundColor = .clear
+        p.isOpaque = false
+        p.hasShadow = true
+        p.hidesOnDeactivate = false
+        p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
+        p.ignoresMouseEvents = true
+
+        let blur = NSVisualEffectView(frame: p.contentView!.bounds)
+        blur.material = .toolTip
+        blur.blendingMode = .behindWindow
+        blur.state = .active
+        blur.wantsLayer = true
+        blur.layer?.cornerRadius = 6
+        blur.layer?.borderWidth = 0.5
+        blur.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
+        blur.layer?.masksToBounds = true
+        blur.autoresizingMask = [.width, .height]
+
+        let lbl = NSTextField(labelWithString: "")
+        lbl.font = .systemFont(ofSize: 12, weight: .regular)
+        lbl.textColor = .labelColor
+        lbl.backgroundColor = .clear
+        lbl.isBordered = false
+        lbl.isEditable = false
+        lbl.alignment = .center
+        blur.addSubview(lbl)
+
+        p.contentView = blur
+        panel = p
+        label = lbl
     }
 }
 
