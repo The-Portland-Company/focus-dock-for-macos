@@ -90,7 +90,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let pl = CGFloat(prefs.paddingLeft), pr = CGFloat(prefs.paddingRight)
         let offset = CGFloat(prefs.edgeOffset)
 
-        let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0))
+        let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0))
         let iconSize = CGFloat(prefs.iconSize)
         let spacing = CGFloat(prefs.spacing)
         let isVerticalEdge = (edge == .left || edge == .right)
@@ -309,10 +309,19 @@ struct DockView: View {
                                               path: "/System/Library/CoreServices/Finder.app",
                                               name: "Finder")
 
-    /// All items rendered in the dock, optionally prepended by a virtual Finder item.
+    private static let trashID = UUID(uuidString: "F1DE0000-0000-0000-0000-000000000002")!
+    private static let trashEntry = AppEntry(id: trashID,
+                                             path: (NSHomeDirectory() as NSString).appendingPathComponent(".Trash"),
+                                             name: "Trash")
+
+    /// All items rendered in the dock, optionally prepended by a virtual Finder
+    /// item and/or appended with a virtual Trash item.
     private var renderedItems: [DockItem] {
-        guard prefs.showFinder else { return library.items }
-        return [.app(Self.finderEntry)] + library.items
+        var result: [DockItem] = []
+        if prefs.showFinder { result.append(.app(Self.finderEntry)) }
+        result.append(contentsOf: library.items)
+        if prefs.showTrash { result.append(.app(Self.trashEntry)) }
+        return result
     }
 
     /// Effective per-icon scale to fit content within the dock window length.

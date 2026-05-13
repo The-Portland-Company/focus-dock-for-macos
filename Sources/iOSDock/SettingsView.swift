@@ -476,6 +476,12 @@ struct SettingsView: View {
                         set: { prefs.showFinder = $0 }
                     ))
                 }
+                settingRow(.showTrash) {
+                    Toggle("Show Trash as the last icon", isOn: Binding(
+                        get: { prefs.showTrash },
+                        set: { prefs.showTrash = $0 }
+                    ))
+                }
                 Toggle("Edit Layout (drag the dock to any edge to snap)", isOn: Binding(
                     get: { prefs.isEditingLayout },
                     set: { prefs.isEditingLayout = $0 }
