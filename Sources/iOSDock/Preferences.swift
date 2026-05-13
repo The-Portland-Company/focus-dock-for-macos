@@ -44,10 +44,10 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: kMagnify) == nil { defaults.set(true, forKey: kMagnify) }
         if defaults.object(forKey: kMagnifySize) == nil { defaults.set(110.0, forKey: kMagnifySize) }
         if defaults.object(forKey: kLabelMode) == nil { defaults.set("tooltip", forKey: kLabelMode) }
-        if defaults.object(forKey: kMarginTop) == nil { defaults.set(8.0, forKey: kMarginTop) }
-        if defaults.object(forKey: kMarginBottom) == nil { defaults.set(8.0, forKey: kMarginBottom) }
-        if defaults.object(forKey: kMarginLeft) == nil { defaults.set(20.0, forKey: kMarginLeft) }
-        if defaults.object(forKey: kMarginRight) == nil { defaults.set(20.0, forKey: kMarginRight) }
+        if defaults.object(forKey: kMarginTop) == nil { defaults.set(0.0, forKey: kMarginTop) }
+        if defaults.object(forKey: kMarginBottom) == nil { defaults.set(10.0, forKey: kMarginBottom) }
+        if defaults.object(forKey: kMarginLeft) == nil { defaults.set(15.0, forKey: kMarginLeft) }
+        if defaults.object(forKey: kMarginRight) == nil { defaults.set(15.0, forKey: kMarginRight) }
         if defaults.object(forKey: kFlushBottom) == nil { defaults.set(true, forKey: kFlushBottom) }
         if defaults.object(forKey: kCornerRadius) == nil { defaults.set(24.0, forKey: kCornerRadius) }
         if defaults.object(forKey: kTintBackground) == nil { defaults.set(false, forKey: kTintBackground) }
@@ -71,6 +71,13 @@ final class Preferences: ObservableObject {
             defaults.set(18.0, forKey: kMarginLeft)
             defaults.set(18.0, forKey: kMarginRight)
             defaults.set(true, forKey: "didMigratePadding")
+        }
+        if !defaults.bool(forKey: "didMigratePaddingV2") {
+            defaults.set(0.0, forKey: kMarginTop)
+            defaults.set(10.0, forKey: kMarginBottom)
+            defaults.set(15.0, forKey: kMarginLeft)
+            defaults.set(15.0, forKey: kMarginRight)
+            defaults.set(true, forKey: "didMigratePaddingV2")
         }
         defaults.set(false, forKey: kEditing)
     }
@@ -113,7 +120,7 @@ final class Preferences: ObservableObject {
         .iconSize: 64.0, .spacing: 14.0,
         .magnifyOnHover: true, .magnifySize: 110.0,
         .labelMode: "tooltip",
-        .marginTop: 14.0, .marginBottom: 14.0, .marginLeft: 18.0, .marginRight: 18.0,
+        .marginTop: 0.0, .marginBottom: 10.0, .marginLeft: 15.0, .marginRight: 15.0,
         .flushBottom: true, .cornerRadius: 24.0,
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
         .edgeOffset: 8.0, .showFinder: true,
