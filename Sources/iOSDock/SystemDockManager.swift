@@ -41,6 +41,11 @@ enum SystemDockManager {
                 d.set(dock.object(forKey: "autohide-delay"), forKey: "savedDock.autohide-delay")
                 d.set(dock.object(forKey: "autohide-time-modifier"), forKey: "savedDock.autohide-time-modifier")
                 d.set(dock.object(forKey: "no-bouncing"), forKey: "savedDock.no-bouncing")
+            }
+            // Captured separately so users who already had the system Dock
+            // hidden by a prior version (which didn't track these keys) still
+            // get their originals saved on the next hide.
+            if d.object(forKey: "savedDock.tilesize") == nil {
                 d.set(dock.object(forKey: "tilesize"), forKey: "savedDock.tilesize")
                 d.set(dock.object(forKey: "magnification"), forKey: "savedDock.magnification")
                 d.set(dock.object(forKey: "largesize"), forKey: "savedDock.largesize")
