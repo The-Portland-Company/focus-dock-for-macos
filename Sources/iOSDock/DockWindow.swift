@@ -445,8 +445,23 @@ struct DockView: View {
         .coordinateSpace(name: "dock")
         .onContinuousHover(coordinateSpace: .named("dock")) { phase in
             switch phase {
-            case .active(let p): hoverPoint = p
-            case .ended: hoverPoint = nil
+            case .active(let p):
+                // Animate only the enter transition (nil → point) so icons
+                // spring up to magnified size on first hover. Subsequent
+                // continuous moves bypass the animation so the magnification
+                // tracks the cursor 1:1 without spring lag.
+                if hoverPoint == nil {
+                    withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+                        hoverPoint = p
+                    }
+                } else {
+                    hoverPoint = p
+                }
+            case .ended:
+                // Animate the exit so icons spring back down smoothly.
+                withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+                    hoverPoint = nil
+                }
             }
         }
         .environmentObject(dragState)
