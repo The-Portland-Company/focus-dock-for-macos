@@ -125,28 +125,35 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         // safe-area or rounding reasons, the bleed swallows it. The bleed is
         // off-screen, so it has no visible cost.
         let bleed: CGFloat = useFlush ? 3 : 0
+        // Magnification headroom along the dock axis: when an edge icon
+        // magnifies, the centered icon stack expands by (magnifySize -
+        // effectiveIcon). Reserve that growth in the window length so the
+        // rounded chrome corners stay outside the magnified icon — otherwise
+        // the icon overlaps the corner and the dock visually "goes square"
+        // at the hovered end.
+        let alongHeadroom: CGFloat = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - effectiveIcon) : 0
         let frame: NSRect
         switch edge {
         case .bottom:
-            let desired = totalIcons + pl + pr
+            let desired = totalIcons + pl + pr + alongHeadroom
             let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let y = useFlush ? area.minY - bleed : area.minY + offset
             frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal + bleed)
         case .top:
-            let desired = totalIcons + pl + pr
+            let desired = totalIcons + pl + pr + alongHeadroom
             let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let y = useFlush ? area.maxY - thicknessHorizontal : area.maxY - thicknessHorizontal - offset
             frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal + bleed)
         case .left:
-            let desired = totalIcons + pt + pb
+            let desired = totalIcons + pt + pb + alongHeadroom
             let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let x = useFlush ? area.minX - bleed : area.minX + offset
             frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical + bleed, height: length)
         case .right:
-            let desired = totalIcons + pt + pb
+            let desired = totalIcons + pt + pb + alongHeadroom
             let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let x = useFlush ? area.maxX - thicknessVertical : area.maxX - thicknessVertical - offset
