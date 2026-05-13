@@ -35,8 +35,8 @@ struct SettingsView: View {
             }
             .padding()
         }
-        .frame(minWidth: 480, idealWidth: 600, maxWidth: .infinity,
-               minHeight: 420, idealHeight: 560, maxHeight: .infinity)
+        .frame(minWidth: 480, idealWidth: 520, maxWidth: .infinity,
+               minHeight: 420, idealHeight: 900, maxHeight: .infinity)
         .onAppear {
             UserDefaults.standard.set(true, forKey: "hasSeenSettings")
         }
