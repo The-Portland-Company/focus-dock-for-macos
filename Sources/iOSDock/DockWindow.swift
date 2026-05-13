@@ -372,16 +372,16 @@ struct DockItemView: View {
                         .animation(.spring(response: 0.4, dampingFraction: 0.6), value: isFormingFolder)
                 }
 
-                // Fixed-size layout cell, sized to the resting icon size, so the
-                // dock width never changes as icons magnify.
+                // Layout cell grows along the dock axis with the displayed icon
+                // size, so magnified icons push neighbors aside instead of
+                // overlapping them (matches macOS Dock magnification).
+                let scale = isDragging ? max(1.1, magScale) : (isHoverTarget ? 0.92 : magScale)
+                let displaySize = iconSize * scale
+                let cellW = isVertical ? iconSize : max(iconSize, displaySize)
+                let cellH = isVertical ? max(iconSize, displaySize) : iconSize
                 Color.clear
-                    .frame(width: iconSize, height: iconSize)
+                    .frame(width: cellW, height: cellH)
                     .overlay(alignment: isVertical ? .leading : .bottom) {
-                        // The actual image is sized at the current displayed size
-                        // (iconSize * scale) and re-rasterized cleanly each frame,
-                        // avoiding the blur you get from .scaleEffect upscaling.
-                        let scale = isDragging ? max(1.1, magScale) : (isHoverTarget ? 0.92 : magScale)
-                        let displaySize = iconSize * scale
                         iconContent(size: displaySize)
                             .opacity(isDragging ? 0.85 : 1.0)
                             // Badge rides the actual displayed icon's top-right
