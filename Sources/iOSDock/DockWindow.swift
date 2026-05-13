@@ -491,7 +491,7 @@ struct DockView: View {
             // When "Fill width" is on, compute spacing automatically so the icons
             // are evenly distributed across the available interior width.
             let interior = max(0, avail - CGFloat(isVertical ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight))
-            let n = max(1, renderedItems.count)
+            let n = max(1, renderedSlots.count)
             let autoSpacing: CGFloat = n > 1 ? max(0, (interior - CGFloat(n) * scaledIcon) / CGFloat(n - 1)) : 0
             let scaledSpacing = prefs.fillWidth ? autoSpacing : spacing * scale
 
