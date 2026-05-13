@@ -20,6 +20,7 @@ targets:
         LSMinimumSystemVersion: "13.0"
         NSHighResolutionCapable: true
         LSUIElement: true
+        NSAppleEventsUsageDescription: "Focus: Dock asks Finder how many items are in the Trash so the dock icon can show empty or full."
         NSMainStoryboardFile: ""
         CFBundleIconName: AppIcon
         CFBundleIconFile: AppIcon

@@ -1,47 +1,51 @@
 import Foundation
+import AppKit
 
-/// Watches `~/.Trash` and bumps `AppLibrary.trashTick` whenever the directory
-/// changes. We need this because `IconCache` already returns the correct
-/// empty/full bin icon at lookup time, but nothing else re-renders the dock
-/// when the trash transitions between empty and non-empty.
+/// Tracks whether `~/.Trash` is empty so the dock's Trash icon can render
+/// the correct empty/full bitmap.
+///
+/// We can't just read the directory: macOS TCC blocks `~/.Trash` for any
+/// process without Full Disk Access, and `FileManager.contentsOfDirectory`
+/// returns EPERM. Instead we ask Finder, which owns the Trash, via
+/// AppleScript. That requires Automation permission for Finder — macOS
+/// prompts the user once and remembers the answer.
 final class TrashWatcher {
     static let shared = TrashWatcher()
 
-    private var source: DispatchSourceFileSystemObject?
-    private var fd: Int32 = -1
+    private var timer: Timer?
+    private let pollInterval: TimeInterval = 3.0
+    private let script = NSAppleScript(source: "tell application \"Finder\" to count items of trash")
 
     func start() {
         stop()
-        let path = (NSHomeDirectory() as NSString).appendingPathComponent(".Trash")
-        let descriptor = open(path, O_EVTONLY)
-        guard descriptor >= 0 else { return }
-        let src = DispatchSource.makeFileSystemObjectSource(
-            fileDescriptor: descriptor,
-            eventMask: [.write, .delete, .rename, .link, .extend],
-            queue: .main
-        )
-        src.setEventHandler { [weak self] in
-            AppLibrary.shared.trashTick &+= 1
-            // Re-arm by reopening — some events (delete/rename of the dir
-            // itself) invalidate the descriptor. In practice ~/.Trash isn't
-            // deleted, but if a mass-empty replaces it, we want to recover.
-            if let self = self, src.data.contains(.delete) || src.data.contains(.rename) {
-                self.start()
-            }
+        tick()
+        let t = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
+            self?.tick()
         }
-        src.setCancelHandler {
-            close(descriptor)
-        }
-        src.resume()
-        fd = descriptor
-        source = src
-        // Seed once so the icon is correct immediately on launch.
-        AppLibrary.shared.trashTick &+= 1
+        RunLoop.main.add(t, forMode: .common)
+        timer = t
     }
 
     func stop() {
-        source?.cancel()
-        source = nil
-        fd = -1
+        timer?.invalidate()
+        timer = nil
+    }
+
+    private func tick() {
+        // Run the AppleScript off the main thread — Finder can take a beat
+        // to answer if it's busy, and the result is published back on main.
+        DispatchQueue.global(qos: .utility).async { [weak self] in
+            guard let self else { return }
+            var err: NSDictionary?
+            let result = self.script?.executeAndReturnError(&err)
+            guard err == nil, let result, result.descriptorType != 0 else { return }
+            let count = Int(result.int32Value)
+            let isEmpty = count == 0
+            DispatchQueue.main.async {
+                if AppLibrary.shared.trashIsEmpty != isEmpty {
+                    AppLibrary.shared.trashIsEmpty = isEmpty
+                }
+            }
+        }
     }
 }
