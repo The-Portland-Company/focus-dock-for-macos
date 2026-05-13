@@ -1,5 +1,8 @@
 import Foundation
 import AppKit
+import OSLog
+
+private let twLog = Logger(subsystem: "com.theportlandcompany.FocusDock", category: "TrashWatcher")
 
 /// Tracks whether `~/.Trash` is empty so the dock's Trash icon can render
 /// the correct empty/full bitmap.
@@ -48,12 +51,12 @@ final class TrashWatcher {
                 try task.run()
                 task.waitUntilExit()
             } catch {
-                NSLog("[TrashWatcher] task.run failed: \(error)")
+                twLog.info("[TrashWatcher] task.run failed: \(error)")
                 return
             }
             let stdoutText = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             let stderrText = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            NSLog("[TrashWatcher] exit=\(task.terminationStatus) out=\(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines).debugDescription) err=\(stderrText.trimmingCharacters(in: .whitespacesAndNewlines).debugDescription)")
+            twLog.info("[TrashWatcher] exit=\(task.terminationStatus) out=\(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines).debugDescription) err=\(stderrText.trimmingCharacters(in: .whitespacesAndNewlines).debugDescription)")
             guard task.terminationStatus == 0,
                   let count = Int(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
             else { return }
@@ -61,7 +64,7 @@ final class TrashWatcher {
             DispatchQueue.main.async {
                 if AppLibrary.shared.trashIsEmpty != isEmpty {
                     AppLibrary.shared.trashIsEmpty = isEmpty
-                    NSLog("[TrashWatcher] published isEmpty=\(isEmpty)")
+                    twLog.info("[TrashWatcher] published isEmpty=\(isEmpty)")
                 }
             }
         }
