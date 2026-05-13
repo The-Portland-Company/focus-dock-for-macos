@@ -328,6 +328,10 @@ struct DockView: View {
                                               path: "/System/Library/CoreServices/Finder.app",
                                               name: "Finder")
 
+    static func isReservedID(_ id: UUID) -> Bool {
+        id == finderID || id == trashID
+    }
+
     private static let trashID = UUID(uuidString: "F1DE0000-0000-0000-0000-000000000002")!
     private static let trashEntry = AppEntry(id: trashID,
                                              path: (NSHomeDirectory() as NSString).appendingPathComponent(".Trash"),
@@ -611,6 +615,9 @@ final class DragState: ObservableObject {
     @Published var hoverStarted: Date? = nil
     @Published var wiggle: Bool = false
     @Published var folderForming: UUID? = nil // target id when threshold reached
+    /// True while the cursor is far enough outside the dock window that
+    /// releasing would remove the dragged item (native-Dock drag-off behavior).
+    @Published var draggedOutside: Bool = false
     /// timestamp when first hover began (for the *current* hover target)
     var hoverTimer: Timer?
 
@@ -667,6 +674,9 @@ struct DockItemView: View {
         let isHoverTarget = dragState.hoverTargetID == item.id
         let isFormingFolder = dragState.folderForming == item.id
         let magScale = magnificationScale
+        // While the dragged item is outside the dock, collapse its layout cell
+        // so neighbors close the gap — matches native Dock drag-off behavior.
+        let isDetached = isDragging && dragState.draggedOutside && !DockView.isReservedID(item.id)
 
         VStack(spacing: 4) {
             if prefs.labelMode == .above {
@@ -687,13 +697,13 @@ struct DockItemView: View {
                 // overlapping them (matches macOS Dock magnification).
                 let scale = isDragging ? max(1.1, magScale) : (isHoverTarget ? 0.92 : magScale)
                 let displaySize = iconSize * scale
-                let cellW = isVertical ? iconSize : max(iconSize, displaySize)
-                let cellH = isVertical ? max(iconSize, displaySize) : iconSize
+                let cellW = isDetached ? 0 : (isVertical ? iconSize : max(iconSize, displaySize))
+                let cellH = isDetached ? 0 : (isVertical ? max(iconSize, displaySize) : iconSize)
                 Color.clear
                     .frame(width: cellW, height: cellH)
                     .overlay(alignment: isVertical ? .leading : .bottom) {
                         iconContent(size: displaySize)
-                            .opacity(isDragging ? 0.85 : 1.0)
+                            .opacity(isDetached ? 0 : (isDragging ? 0.85 : 1.0))
                             // Badge rides the actual displayed icon's top-right
                             // corner so it stays pinned to the corner whether
                             // the icon is at rest or magnified.
@@ -841,6 +851,29 @@ struct DockItemView: View {
         // Find which OTHER item we are over.
         guard let myFrame = currentItemFrame() else { return }
 
+        // Native-Dock parity: if the cursor leaves the dock window's bounds
+        // (with a small forgiveness pad), treat this drag as "outside" — the
+        // dragged icon detaches and will poof on release. Re-entry restores
+        // normal drop-target logic.
+        let mouse = NSEvent.mouseLocation
+        let outside: Bool = {
+            guard let win = DockTooltipPanel.dockWindow else { return false }
+            return !win.frame.insetBy(dx: -10, dy: -10).contains(mouse)
+        }()
+        if outside != dragState.draggedOutside {
+            withAnimation(.spring(response: 0.28, dampingFraction: 0.85)) {
+                dragState.draggedOutside = outside
+            }
+        }
+        if outside {
+            if dragState.hoverTargetID != nil {
+                dragState.hoverTargetID = nil
+                dragState.folderForming = nil
+            }
+            dragState.cancelHoverTimer()
+            return
+        }
+
         // The dragged finger location → adjusted by our own frame center + translation
         let pointer = CGPoint(
             x: myFrame.midX + dragState.dragOffset.width,
@@ -877,8 +910,33 @@ struct DockItemView: View {
     private func finishDrag(at location: CGPoint) {
         let target = dragState.hoverTargetID
         let dragged = item.id
+        let droppedOutside = dragState.draggedOutside
 
         dragState.cancelHoverTimer()
+
+        // Native-Dock drag-off-to-remove. If the cursor is outside the dock at
+        // release, poof the icon at the cursor and remove it from the library.
+        // Finder/Trash are pseudo-items not stored in library.items; removeItem
+        // is a no-op for them, so we skip the poof and snap them back.
+        let isRemovableItem = !DockView.isReservedID(dragged)
+        if droppedOutside && isRemovableItem {
+            let releasePoint = NSEvent.mouseLocation
+            NSAnimationEffect.poof.show(
+                centeredAt: releasePoint,
+                size: NSSize(width: 64, height: 64),
+                completionHandler: {}
+            )
+            library.removeItem(id: dragged)
+            dragState.draggingID = nil
+            dragState.dragOffset = .zero
+            dragState.hoverTargetID = nil
+            dragState.folderForming = nil
+            dragState.draggedOutside = false
+            DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
+                withAnimation { dragState.wiggle = false }
+            }
+            return
+        }
 
         // More forgiving rule: if there's a valid hover target at release time,
         // create / merge into the folder regardless of whether the 0.8s "wiggle"
@@ -897,6 +955,7 @@ struct DockItemView: View {
             dragState.dragOffset = .zero
             dragState.hoverTargetID = nil
             dragState.folderForming = nil
+            dragState.draggedOutside = false
         }
 
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.5) {
