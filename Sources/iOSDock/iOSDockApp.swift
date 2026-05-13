@@ -37,14 +37,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         installStatusItemIfNeeded()
         installDockIcon()
 
-        // If a previous run was force-quit while the Dock was hidden, restore
-        // originals first so we don't lose them when we re-hide below.
-        SystemDockManager.selfHealIfStaleHide()
-
-        // Install crash/force-quit backstop BEFORE hiding the Dock so abnormal
-        // exits (SIGTERM, SIGINT, atexit) still restore the system Dock.
-        QuitBackstop.install()
-
         // Offer to hide system Dock (so this dock can take over).
         SystemDockManager.hideSystemDock()
 

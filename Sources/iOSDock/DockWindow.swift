@@ -385,15 +385,13 @@ struct DockItemView: View {
                         iconContent
                             .frame(width: displaySize, height: displaySize)
                             .opacity(isDragging ? 0.85 : 1.0)
+                            // Badge rides the actual displayed icon's top-right
+                            // corner so it stays pinned to the corner whether
+                            // the icon is at rest or magnified.
+                            .overlay(alignment: .topTrailing) {
+                                badgeOverlay(displaySize: displaySize)
+                            }
                             .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
-                    }
-                    // Badge anchored to the resting cell's top-right, NOT the
-                    // magnified icon's, so it stays put when the icon grows
-                    // upward on hover. Size still scales with displaySize for
-                    // legibility — only the anchor point is stable.
-                    .overlay(alignment: .topTrailing) {
-                        let scale = isDragging ? max(1.1, magScale) : (isHoverTarget ? 0.92 : magScale)
-                        badgeOverlay(displaySize: iconSize * scale)
                     }
             }
             .background(
