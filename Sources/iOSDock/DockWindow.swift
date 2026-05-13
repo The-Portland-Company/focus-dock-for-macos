@@ -32,6 +32,13 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var prefsObserver: NSObjectProtocol?
     private var snapWorkItem: DispatchWorkItem?
 
+    // Auto-hide state. `shownFrame` is the laid-out frame as if the dock were
+    // visible; the window itself may be parked at `hiddenFrame(for:)` instead.
+    private var shownFrame: NSRect = .zero
+    private var isAutoHidden: Bool = false
+    private var autoHideTimer: Timer?
+    private var hideWorkItem: DispatchWorkItem?
+
     convenience init() {
         let content = DockView()
             .environmentObject(AppLibrary.shared)
@@ -57,6 +64,12 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         prefsObserver = NotificationCenter.default.addObserver(
             forName: Preferences.changed, object: nil, queue: .main
         ) { [weak self] _ in self?.applyLayout() }
+        startAutoHideTimer()
+    }
+
+    deinit {
+        autoHideTimer?.invalidate()
+        if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
     }
 
     /// Compute the proper window size and origin for the configured edge.
@@ -139,7 +152,109 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
             let x = useFlush ? area.maxX - thicknessVertical : area.maxX - thicknessVertical - offset
             frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical + bleed, height: length)
         }
-        win.setFrame(frame, display: true, animate: false)
+        shownFrame = frame
+        // While the user is editing layout, always show the dock regardless of
+        // autohide so they can see what they're dragging.
+        let shouldHide = prefs.autoHideDock && !prefs.isEditingLayout && isAutoHidden
+        let target = shouldHide ? hiddenFrame(from: frame, edge: edge, on: screen) : frame
+        win.setFrame(target, display: true, animate: false)
+    }
+
+    // MARK: - Auto-hide
+
+    private func startAutoHideTimer() {
+        autoHideTimer?.invalidate()
+        autoHideTimer = Timer.scheduledTimer(withTimeInterval: 0.08, repeats: true) { [weak self] _ in
+            self?.evaluateAutoHide()
+        }
+    }
+
+    private func evaluateAutoHide() {
+        let prefs = Preferences.shared
+        guard prefs.autoHideDock, !prefs.isEditingLayout else {
+            if isAutoHidden { reveal() }
+            return
+        }
+        guard let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        let mouse = NSEvent.mouseLocation
+        let edge = prefs.edge
+        if isAutoHidden {
+            if revealZone(from: shownFrame, edge: edge, on: screen).contains(mouse) {
+                reveal()
+            }
+        } else {
+            // Keep visible if the cursor is over the dock or in its reveal zone.
+            let active = shownFrame.insetBy(dx: -2, dy: -2)
+            if !active.contains(mouse) {
+                scheduleHide()
+            } else {
+                hideWorkItem?.cancel()
+                hideWorkItem = nil
+            }
+        }
+    }
+
+    private func scheduleHide() {
+        guard hideWorkItem == nil else { return }
+        let work = DispatchWorkItem { [weak self] in
+            guard let self else { return }
+            self.hideWorkItem = nil
+            let prefs = Preferences.shared
+            guard prefs.autoHideDock, !prefs.isEditingLayout else { return }
+            // Re-check the cursor position at fire-time so a quick re-entry
+            // cancels the hide.
+            if self.shownFrame.insetBy(dx: -2, dy: -2).contains(NSEvent.mouseLocation) { return }
+            self.hide()
+        }
+        hideWorkItem = work
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.45, execute: work)
+    }
+
+    private func hide() {
+        guard !isAutoHidden, let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        isAutoHidden = true
+        let target = hiddenFrame(from: shownFrame, edge: Preferences.shared.edge, on: screen)
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            ctx.allowsImplicitAnimation = true
+            win.animator().setFrame(target, display: true)
+        }
+    }
+
+    private func reveal() {
+        guard isAutoHidden, let win = window else { return }
+        isAutoHidden = false
+        NSAnimationContext.runAnimationGroup { ctx in
+            ctx.duration = 0.18
+            ctx.allowsImplicitAnimation = true
+            win.animator().setFrame(shownFrame, display: true)
+        }
+    }
+
+    /// Frame that parks the dock just off the active edge, leaving a 2pt strip
+    /// on-screen as the reveal trigger.
+    private func hiddenFrame(from shown: NSRect, edge: Preferences.Edge, on screen: NSScreen) -> NSRect {
+        let strip: CGFloat = 2
+        let s = screen.frame
+        switch edge {
+        case .bottom: return NSRect(x: shown.minX, y: s.minY - shown.height + strip, width: shown.width, height: shown.height)
+        case .top:    return NSRect(x: shown.minX, y: s.maxY - strip, width: shown.width, height: shown.height)
+        case .left:   return NSRect(x: s.minX - shown.width + strip, y: shown.minY, width: shown.width, height: shown.height)
+        case .right:  return NSRect(x: s.maxX - strip, y: shown.minY, width: shown.width, height: shown.height)
+        }
+    }
+
+    /// Thin strip at the screen edge across the dock's span — the cursor enters
+    /// this region to reveal a hidden dock.
+    private func revealZone(from shown: NSRect, edge: Preferences.Edge, on screen: NSScreen) -> NSRect {
+        let strip: CGFloat = 3
+        let s = screen.frame
+        switch edge {
+        case .bottom: return NSRect(x: shown.minX, y: s.minY, width: shown.width, height: strip)
+        case .top:    return NSRect(x: shown.minX, y: s.maxY - strip, width: shown.width, height: strip)
+        case .left:   return NSRect(x: s.minX, y: shown.minY, width: strip, height: shown.height)
+        case .right:  return NSRect(x: s.maxX - strip, y: shown.minY, width: strip, height: shown.height)
+        }
     }
 
     // Live snap-to-nearest-edge while dragging in edit mode.

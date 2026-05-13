@@ -57,7 +57,7 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: kBorderWidth) == nil { defaults.set(0.5, forKey: kBorderWidth) }
         if defaults.object(forKey: kEdgeOffset) == nil { defaults.set(8.0, forKey: kEdgeOffset) }
         if defaults.object(forKey: kShowFinder) == nil { defaults.set(true, forKey: kShowFinder) }
-        if defaults.object(forKey: kAutoHide) == nil { defaults.set(false, forKey: kAutoHide) }
+        if defaults.object(forKey: kAutoHide) == nil { defaults.set(true, forKey: kAutoHide) }
         if defaults.object(forKey: kBounce) == nil { defaults.set(true, forKey: kBounce) }
         if defaults.object(forKey: kRunningDots) == nil { defaults.set(true, forKey: kRunningDots) }
         if defaults.object(forKey: kShowRecents) == nil { defaults.set(false, forKey: kShowRecents) }
@@ -78,6 +78,10 @@ final class Preferences: ObservableObject {
             defaults.set(15.0, forKey: kMarginLeft)
             defaults.set(15.0, forKey: kMarginRight)
             defaults.set(true, forKey: "didMigratePaddingV2")
+        }
+        if !defaults.bool(forKey: "didMigrateAutoHideDefault") {
+            defaults.set(true, forKey: kAutoHide)
+            defaults.set(true, forKey: "didMigrateAutoHideDefault")
         }
         defaults.set(false, forKey: kEditing)
     }
@@ -124,7 +128,7 @@ final class Preferences: ObservableObject {
         .flushBottom: true, .cornerRadius: 24.0,
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
         .edgeOffset: 8.0, .showFinder: true,
-        .autoHideDock: false, .bounceOnLaunch: true, .showRunningIndicators: true, .showRecentApps: false,
+        .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .showRecentApps: false,
         .fillWidth: false, .paddingUniform: false
     ]
 
