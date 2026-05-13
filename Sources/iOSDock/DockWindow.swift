@@ -382,8 +382,7 @@ struct DockItemView: View {
                         // avoiding the blur you get from .scaleEffect upscaling.
                         let scale = isDragging ? max(1.1, magScale) : (isHoverTarget ? 0.92 : magScale)
                         let displaySize = iconSize * scale
-                        iconContent
-                            .frame(width: displaySize, height: displaySize)
+                        iconContent(size: displaySize)
                             .opacity(isDragging ? 0.85 : 1.0)
                             // Badge rides the actual displayed icon's top-right
                             // corner so it stays pinned to the corner whether
@@ -454,15 +453,15 @@ struct DockItemView: View {
         }
     }
 
-    @ViewBuilder private var iconContent: some View {
+    @ViewBuilder private func iconContent(size: CGFloat) -> some View {
         switch item {
         case .app(let a):
             Image(nsImage: a.icon)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: iconSize, height: iconSize)
+                .frame(width: size, height: size)
         case .folder(let f):
-            FolderIconView(folder: f, size: iconSize)
+            FolderIconView(folder: f, size: size)
         }
     }
 
