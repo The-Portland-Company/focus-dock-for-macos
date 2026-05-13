@@ -1,5 +1,6 @@
 import SwiftUI
 import AppKit
+import Combine
 
 /// Hosting controller that hard-zeros every safe-area inset path SwiftUI may
 /// otherwise apply to a borderless `NSPanel`. The Flush-with-Edge bug kept
@@ -31,6 +32,8 @@ final class DockHostingController<Content: View>: NSHostingController<Content> {
 final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var prefsObserver: NSObjectProtocol?
     private var screenObserver: NSObjectProtocol?
+    private var minimizedObserver: NSKeyValueObservation?
+    private var minimizedSubscription: Any?
     private var snapWorkItem: DispatchWorkItem?
 
     // Auto-hide state. `shownFrame` is the laid-out frame as if the dock were
@@ -74,6 +77,11 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.applyLayout() }
+        // Re-run layout when the minimized-window list changes so the dock
+        // grows/shrinks to accommodate new tiles.
+        minimizedSubscription = MinimizedMonitor.shared.$windows.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.applyLayout() }
+        }
         startAutoHideTimer()
     }
 
@@ -101,7 +109,10 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let pl = CGFloat(prefs.effectivePaddingLeft), pr = CGFloat(prefs.effectivePaddingRight)
         let offset = CGFloat(prefs.edgeOffset)
 
-        let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0))
+        let mins = MinimizedMonitor.shared.windows.count
+        // +1 for the divider when any minimized tiles are present.
+        let dividerCount = mins > 0 ? 1 : 0
+        let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0) + mins + dividerCount)
         let iconSize = CGFloat(prefs.effectiveIconSize)
         let spacing = CGFloat(prefs.effectiveSpacing)
         let isVerticalEdge = (edge == .left || edge == .right)
@@ -307,10 +318,36 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
 
 // MARK: - DockView
 
+/// Wrapper around the heterogeneous things that can appear in the dock: a
+/// regular DockItem (app/folder), a minimized-window tile, or a fixed divider
+/// separating the right-side protected zone from the regular apps.
+enum DockSlot: Identifiable {
+    case item(DockItem)
+    case minimized(MinimizedWindow)
+    case divider
+
+    var id: AnyHashable {
+        switch self {
+        case .item(let i): return AnyHashable(i.id)
+        case .minimized(let w): return AnyHashable(w.id)
+        case .divider: return AnyHashable("divider")
+        }
+    }
+
+    /// True if this slot participates in drag-to-reorder / folder-merge.
+    /// Minimized tiles and dividers are protected — they can't be dragged
+    /// and other items can't be dropped onto them.
+    var isReorderable: Bool {
+        if case .item = self { return true }
+        return false
+    }
+}
+
 struct DockView: View {
     @EnvironmentObject var library: AppLibrary
     @EnvironmentObject var prefs: Preferences
     @StateObject private var dragState = DragState()
+    @StateObject private var minimized = MinimizedMonitor.shared
     @State private var hoverPoint: CGPoint? = nil
 
     private var iconSize: CGFloat { CGFloat(prefs.effectiveIconSize) }
@@ -347,9 +384,26 @@ struct DockView: View {
         return result
     }
 
+    /// Full slot list: regular items, then a divider + minimized-window tiles
+    /// inserted in the protected zone just before the Trash icon (or at the
+    /// end if Trash is hidden). The divider and minimized tiles only appear
+    /// when at least one window is minimized.
+    private var renderedSlots: [DockSlot] {
+        var result: [DockSlot] = []
+        if prefs.showFinder { result.append(.item(.app(Self.finderEntry))) }
+        result.append(contentsOf: library.items.map { DockSlot.item($0) })
+        let mins = minimized.windows
+        if !mins.isEmpty {
+            result.append(.divider)
+            result.append(contentsOf: mins.map { DockSlot.minimized($0) })
+        }
+        if prefs.showTrash { result.append(.item(.app(Self.trashEntry))) }
+        return result
+    }
+
     /// Effective per-icon scale to fit content within the dock window length.
     private func effectiveScale(in available: CGFloat) -> CGFloat {
-        let n = max(1, renderedItems.count)
+        let n = max(1, renderedSlots.count)
         let interior = max(0, available - CGFloat(isVertical ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight))
         let desired = CGFloat(n) * iconSize + CGFloat(max(0, n - 1)) * spacing
         if desired <= interior { return 1 }
@@ -540,15 +594,105 @@ struct DockView: View {
     }
 
     @ViewBuilder private func itemViews(iconSize: CGFloat, spacing: CGFloat) -> some View {
-        ForEach(Array(renderedItems.enumerated()), id: \.element.id) { idx, item in
-            DockItemView(
-                item: item,
-                index: idx,
-                iconSize: iconSize,
-                spacing: spacing,
-                dragState: dragState
-            )
+        ForEach(Array(renderedSlots.enumerated()), id: \.element.id) { idx, slot in
+            switch slot {
+            case .item(let item):
+                DockItemView(
+                    item: item,
+                    index: idx,
+                    iconSize: iconSize,
+                    spacing: spacing,
+                    dragState: dragState
+                )
+            case .minimized(let window):
+                MinimizedTileView(window: window, iconSize: iconSize, isVertical: isVertical)
+            case .divider:
+                DockDivider(isVertical: isVertical, iconSize: iconSize)
+            }
         }
+    }
+}
+
+// MARK: - Minimized tile & divider
+
+/// Renders a single minimized window as a small thumbnail with the app icon
+/// inset in the corner — matches the iOS-dock visual language of this app.
+/// Click restores the window. Tiles are not draggable and are excluded from
+/// the regular-item drop / reorder system.
+struct MinimizedTileView: View {
+    let window: MinimizedWindow
+    let iconSize: CGFloat
+    let isVertical: Bool
+
+    var body: some View {
+        let cellW = isVertical ? iconSize : iconSize
+        let cellH = isVertical ? iconSize : iconSize
+        ZStack(alignment: .bottomTrailing) {
+            // Preview thumbnail (rounded), with app icon fallback.
+            RoundedRectangle(cornerRadius: iconSize * 0.18, style: .continuous)
+                .fill(Color.black.opacity(0.25))
+            Group {
+                if let preview = window.preview {
+                    Image(nsImage: preview)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fill)
+                } else {
+                    Image(nsImage: window.appIcon)
+                        .resizable()
+                        .interpolation(.high)
+                        .aspectRatio(contentMode: .fit)
+                        .padding(iconSize * 0.12)
+                }
+            }
+            .frame(width: cellW, height: cellH)
+            .clipShape(RoundedRectangle(cornerRadius: iconSize * 0.18, style: .continuous))
+            .overlay(
+                RoundedRectangle(cornerRadius: iconSize * 0.18, style: .continuous)
+                    .strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5)
+            )
+
+            // Small app-icon badge in the corner so the user knows which app
+            // the thumbnail belongs to — mirrors macOS Mission Control style.
+            Image(nsImage: window.appIcon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: iconSize * 0.42, height: iconSize * 0.42)
+                .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
+                .offset(x: 2, y: 2)
+        }
+        .frame(width: cellW, height: cellH)
+        .contentShape(Rectangle())
+        .onTapGesture { MinimizedMonitor.shared.unminimize(window) }
+        .help(window.title.isEmpty ? window.appName : window.title)
+    }
+}
+
+/// Vertical (or horizontal when the dock is on a side) divider line marking
+/// the start of the protected minimized-windows zone. Sized relative to the
+/// icon footprint so it scales with the dock.
+struct DockDivider: View {
+    let isVertical: Bool
+    let iconSize: CGFloat
+
+    var body: some View {
+        // The divider occupies a thin layout cell along the dock axis. The
+        // surrounding HStack/VStack adds the normal spacing on each side, so
+        // the divider naturally sits between the protected zone and the
+        // regular apps.
+        Group {
+            if isVertical {
+                Rectangle()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: iconSize * 0.6, height: 1)
+            } else {
+                Rectangle()
+                    .fill(Color.white.opacity(0.18))
+                    .frame(width: 1, height: iconSize * 0.6)
+            }
+        }
+        .frame(width: isVertical ? iconSize : 8, height: isVertical ? 8 : iconSize, alignment: .center)
+        .allowsHitTesting(false)
     }
 }
 

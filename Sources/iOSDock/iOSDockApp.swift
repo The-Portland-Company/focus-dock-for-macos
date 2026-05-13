@@ -53,6 +53,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // silently no-ops until granted.
         BadgeMonitor.shared.start()
 
+        // Surface minimized windows of other apps in the protected right-hand
+        // section of the dock (mirrors native macOS Dock).
+        MinimizedMonitor.shared.start()
+
         // Watch ~/.Trash so the dock's Trash icon swaps between empty/full
         // bitmaps as items move in or out.
         TrashWatcher.shared.start()
