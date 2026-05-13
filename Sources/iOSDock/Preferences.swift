@@ -28,6 +28,7 @@ final class Preferences: ObservableObject {
     private let kBorderWidth = "borderWidth"
     private let kEdgeOffset = "edgeOffset"
     private let kShowFinder = "showFinder"
+    private let kShowTrash = "showTrash"
     private let kAutoHide = "autoHideDock"
     private let kBounce = "bounceOnLaunch"
     private let kRunningDots = "showRunningIndicators"
@@ -58,6 +59,7 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: kBorderWidth) == nil { defaults.set(0.5, forKey: kBorderWidth) }
         if defaults.object(forKey: kEdgeOffset) == nil { defaults.set(8.0, forKey: kEdgeOffset) }
         if defaults.object(forKey: kShowFinder) == nil { defaults.set(true, forKey: kShowFinder) }
+        if defaults.object(forKey: kShowTrash) == nil { defaults.set(true, forKey: kShowTrash) }
         if defaults.object(forKey: kAutoHide) == nil { defaults.set(true, forKey: kAutoHide) }
         if defaults.object(forKey: kBounce) == nil { defaults.set(true, forKey: kBounce) }
         if defaults.object(forKey: kRunningDots) == nil { defaults.set(true, forKey: kRunningDots) }
@@ -115,7 +117,7 @@ final class Preferences: ObservableObject {
              marginTop, marginBottom, marginLeft, marginRight,
              flushBottom, cornerRadius,
              tintBackground, backgroundColor, showBorder, borderColor, borderWidth,
-             edgeOffset, showFinder,
+             edgeOffset, showFinder, showTrash,
              autoHideDock, bounceOnLaunch, showRunningIndicators, showRecentApps,
              fillWidth, paddingUniform, dockScale
     }
@@ -129,7 +131,7 @@ final class Preferences: ObservableObject {
         .marginTop: 0.0, .marginBottom: 10.0, .marginLeft: 15.0, .marginRight: 15.0,
         .flushBottom: true, .cornerRadius: 24.0,
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
-        .edgeOffset: 8.0, .showFinder: true,
+        .edgeOffset: 8.0, .showFinder: true, .showTrash: true,
         .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .showRecentApps: false,
         .fillWidth: false, .paddingUniform: false,
         .dockScale: 1.0
@@ -166,6 +168,10 @@ final class Preferences: ObservableObject {
     var showFinder: Bool {
         get { defaults.bool(forKey: kShowFinder) }
         set { defaults.set(newValue, forKey: kShowFinder); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+    var showTrash: Bool {
+        get { defaults.bool(forKey: kShowTrash) }
+        set { defaults.set(newValue, forKey: kShowTrash); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
     }
     var autoHideDock: Bool {
         get { defaults.bool(forKey: kAutoHide) }

@@ -31,16 +31,31 @@ final class IconCache {
     private let renderSize: CGFloat = 256
 
     func icon(for path: String) -> NSImage {
-        if let cached = cache[path] { return cached }
-        let raw = NSWorkspace.shared.icon(forFile: path)
+        let trashPath = (NSHomeDirectory() as NSString).appendingPathComponent(".Trash")
+        let isTrash = path == trashPath
+        if !isTrash, let cached = cache[path] { return cached }
+        let raw = rawIcon(for: path)
         let img = NSImage(size: NSSize(width: renderSize, height: renderSize))
         img.lockFocus()
         NSGraphicsContext.current?.imageInterpolation = .high
         raw.draw(in: NSRect(x: 0, y: 0, width: renderSize, height: renderSize),
                  from: .zero, operation: .sourceOver, fraction: 1.0)
         img.unlockFocus()
-        cache[path] = img
+        if !isTrash { cache[path] = img }
         return img
+    }
+
+    /// Resolve the raw NSImage for a path. The user's Trash gets the native
+    /// trash-bin icon (empty/full) rather than the generic folder icon that
+    /// NSWorkspace returns for `~/.Trash`.
+    private func rawIcon(for path: String) -> NSImage {
+        let trashPath = (NSHomeDirectory() as NSString).appendingPathComponent(".Trash")
+        if path == trashPath {
+            let isEmpty = ((try? FileManager.default.contentsOfDirectory(atPath: path)) ?? []).isEmpty
+            let name: NSImage.Name = isEmpty ? NSImage.Name("NSTrashEmpty") : NSImage.Name("NSTrashFull")
+            if let img = NSImage(named: name) { return img }
+        }
+        return NSWorkspace.shared.icon(forFile: path)
     }
 }
 
