@@ -4,17 +4,22 @@ import AppKit
 /// Tracks whether `~/.Trash` is empty so the dock's Trash icon can render
 /// the correct empty/full bitmap.
 ///
-/// We can't just read the directory: macOS TCC blocks `~/.Trash` for any
-/// process without Full Disk Access, and `FileManager.contentsOfDirectory`
-/// returns EPERM. Instead we ask Finder, which owns the Trash, via
-/// AppleScript. That requires Automation permission for Finder — macOS
-/// prompts the user once and remembers the answer.
+/// macOS makes this annoyingly hard for unsandboxed third-party apps:
+///   * `FileManager.contentsOfDirectory(atPath: ~/.Trash)` → EPERM (TCC).
+///   * In-process `NSAppleScript → Finder` → TCC refuses to even prompt for
+///     ad-hoc-signed apps ("Policy disallows prompt for ...").
+///   * The system Dock's AX tree exposes the trash item but no attribute
+///     reveals its empty/full state.
+///
+/// What does work: shelling out to `/usr/bin/osascript`. It's an
+/// Apple-signed binary whose AppleEvents authorization is independent of
+/// ours, so macOS shows a normal Automation prompt for it (once) and
+/// remembers the answer.
 final class TrashWatcher {
     static let shared = TrashWatcher()
 
     private var timer: Timer?
     private let pollInterval: TimeInterval = 3.0
-    private let script = NSAppleScript(source: "tell application \"Finder\" to count items of trash")
 
     func start() {
         stop()
@@ -32,18 +37,31 @@ final class TrashWatcher {
     }
 
     private func tick() {
-        // Run the AppleScript off the main thread — Finder can take a beat
-        // to answer if it's busy, and the result is published back on main.
-        DispatchQueue.global(qos: .utility).async { [weak self] in
-            guard let self else { return }
-            var err: NSDictionary?
-            let result = self.script?.executeAndReturnError(&err)
-            guard err == nil, let result, result.descriptorType != 0 else { return }
-            let count = Int(result.int32Value)
+        DispatchQueue.global(qos: .utility).async {
+            let task = Process()
+            task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
+            task.arguments = ["-e", "tell application \"Finder\" to count items of trash"]
+            let out = Pipe(); let err = Pipe()
+            task.standardOutput = out
+            task.standardError = err
+            do {
+                try task.run()
+                task.waitUntilExit()
+            } catch {
+                NSLog("[TrashWatcher] task.run failed: \(error)")
+                return
+            }
+            let stdoutText = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            let stderrText = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
+            NSLog("[TrashWatcher] exit=\(task.terminationStatus) out=\(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines).debugDescription) err=\(stderrText.trimmingCharacters(in: .whitespacesAndNewlines).debugDescription)")
+            guard task.terminationStatus == 0,
+                  let count = Int(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
+            else { return }
             let isEmpty = count == 0
             DispatchQueue.main.async {
                 if AppLibrary.shared.trashIsEmpty != isEmpty {
                     AppLibrary.shared.trashIsEmpty = isEmpty
+                    NSLog("[TrashWatcher] published isEmpty=\(isEmpty)")
                 }
             }
         }
