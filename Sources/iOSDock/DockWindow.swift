@@ -459,11 +459,13 @@ struct DockView: View {
                 } else {
                     hoverPoint = p
                 }
+                updateTooltipFor(point: p)
             case .ended:
                 // Animate the exit so icons spring back down smoothly.
                 withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
                     hoverPoint = nil
                 }
+                DockTooltipPanel.shared.hideAll()
             }
         }
         .environmentObject(dragState)
@@ -472,6 +474,39 @@ struct DockView: View {
         .environment(\.dockMagnifyEnabled, prefs.magnifyOnHover)
         .environment(\.dockMagnifyMax, magnifyMax)
         .environment(\.dockLeadingPad, CGFloat(isVertical ? prefs.paddingTop : prefs.paddingLeft))
+    }
+
+    /// Pick the item under the cursor (by frame in "dock" space) and show
+    /// a floating tooltip bubble for it. Driven from onContinuousHover at
+    /// the DockView level — the only hover hook that fires reliably for
+    /// a non-activating NSPanel.
+    private func updateTooltipFor(point: CGPoint) {
+        guard prefs.labelMode == .tooltip else {
+            DockTooltipPanel.shared.hideAll()
+            return
+        }
+        let pad: CGFloat = 14
+        var picked: (id: UUID, name: String)? = nil
+        let frames = ItemFrameRegistry.shared.frames
+        let items = renderedItems
+        for item in items {
+            if let f = frames[item.id], f.insetBy(dx: -pad, dy: -pad).contains(point) {
+                picked = (item.id, itemLabel(item))
+                break
+            }
+        }
+        if let p = picked {
+            DockTooltipPanel.shared.show(text: p.name, near: p.id, edge: prefs.edge)
+        } else {
+            DockTooltipPanel.shared.hideAll()
+        }
+    }
+
+    private func itemLabel(_ item: DockItem) -> String {
+        switch item {
+        case .app(let a): return a.name
+        case .folder(let f): return f.name
+        }
     }
 
     @ViewBuilder private func itemViews(iconSize: CGFloat, spacing: CGFloat) -> some View {
@@ -572,7 +607,6 @@ struct DockItemView: View {
     @State private var frameInDock: CGRect = .zero
     @State private var showFolderPopover: Bool = false
     @State private var folderFormProgress: CGFloat = 0
-    @State private var isHovering: Bool = false
     @EnvironmentObject var prefs: Preferences
     @Environment(\.dockHoverPoint) private var hoverPoint
     @Environment(\.dockIsVertical) private var isVertical
@@ -673,16 +707,6 @@ struct DockItemView: View {
                 Circle()
                     .fill(Color.primary.opacity(0.6))
                     .frame(width: 4, height: 4)
-            }
-        }
-        .onHover { hovering in
-            isHovering = hovering
-            if prefs.labelMode == .tooltip {
-                if hovering {
-                    DockTooltipPanel.shared.show(text: label, near: item.id, edge: prefs.edge)
-                } else {
-                    DockTooltipPanel.shared.hideIfOwner(item.id)
-                }
             }
         }
         .coordinateSpace(name: "item-\(item.id)")
