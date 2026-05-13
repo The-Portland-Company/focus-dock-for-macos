@@ -41,12 +41,22 @@ enum SystemDockManager {
                 d.set(dock.object(forKey: "autohide-delay"), forKey: "savedDock.autohide-delay")
                 d.set(dock.object(forKey: "autohide-time-modifier"), forKey: "savedDock.autohide-time-modifier")
                 d.set(dock.object(forKey: "no-bouncing"), forKey: "savedDock.no-bouncing")
+                d.set(dock.object(forKey: "tilesize"), forKey: "savedDock.tilesize")
+                d.set(dock.object(forKey: "magnification"), forKey: "savedDock.magnification")
+                d.set(dock.object(forKey: "largesize"), forKey: "savedDock.largesize")
             }
         }
         run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide", "-bool", "true"])
         run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide-delay", "-float", "1000"])
         run("/usr/bin/defaults", ["write", "com.apple.dock", "autohide-time-modifier", "-float", "0"])
         run("/usr/bin/defaults", ["write", "com.apple.dock", "no-bouncing", "-bool", "true"])
+        // Shrink to the minimum tile size and disable magnification so that when
+        // Mission Control / Exposé forcibly reveals the system Dock (Apple's
+        // overlay always shows it, ignoring autohide), it appears as a tiny
+        // sliver instead of a full-size Dock competing with ours.
+        run("/usr/bin/defaults", ["write", "com.apple.dock", "tilesize", "-int", "16"])
+        run("/usr/bin/defaults", ["write", "com.apple.dock", "magnification", "-bool", "false"])
+        run("/usr/bin/defaults", ["write", "com.apple.dock", "largesize", "-int", "16"])
         run("/usr/bin/killall", ["Dock"])
         d.set(true, forKey: kHidden)
     }
@@ -79,6 +89,25 @@ enum SystemDockManager {
             run("/usr/bin/defaults", ["write", "com.apple.dock", "no-bouncing", "-bool", v ? "true" : "false"])
         } else {
             run("/usr/bin/defaults", ["delete", "com.apple.dock", "no-bouncing"])
+        }
+        if let v = d.object(forKey: "savedDock.tilesize") as? Int {
+            run("/usr/bin/defaults", ["write", "com.apple.dock", "tilesize", "-int", String(v)])
+        } else if let v = d.object(forKey: "savedDock.tilesize") as? Double {
+            run("/usr/bin/defaults", ["write", "com.apple.dock", "tilesize", "-int", String(Int(v))])
+        } else {
+            run("/usr/bin/defaults", ["delete", "com.apple.dock", "tilesize"])
+        }
+        if let v = d.object(forKey: "savedDock.magnification") as? Bool {
+            run("/usr/bin/defaults", ["write", "com.apple.dock", "magnification", "-bool", v ? "true" : "false"])
+        } else {
+            run("/usr/bin/defaults", ["delete", "com.apple.dock", "magnification"])
+        }
+        if let v = d.object(forKey: "savedDock.largesize") as? Int {
+            run("/usr/bin/defaults", ["write", "com.apple.dock", "largesize", "-int", String(v)])
+        } else if let v = d.object(forKey: "savedDock.largesize") as? Double {
+            run("/usr/bin/defaults", ["write", "com.apple.dock", "largesize", "-int", String(Int(v))])
+        } else {
+            run("/usr/bin/defaults", ["delete", "com.apple.dock", "largesize"])
         }
         run("/usr/bin/killall", ["Dock"])
         d.set(false, forKey: kHidden)
