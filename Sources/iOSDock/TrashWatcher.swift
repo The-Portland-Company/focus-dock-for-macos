@@ -1,8 +1,5 @@
 import Foundation
 import AppKit
-import OSLog
-
-private let twLog = Logger(subsystem: "com.theportlandcompany.FocusDock", category: "TrashWatcher")
 
 /// Tracks whether `~/.Trash` is empty so the dock's Trash icon can render
 /// the correct empty/full bitmap.
@@ -44,27 +41,23 @@ final class TrashWatcher {
             let task = Process()
             task.executableURL = URL(fileURLWithPath: "/usr/bin/osascript")
             task.arguments = ["-e", "tell application \"Finder\" to count items of trash"]
-            let out = Pipe(); let err = Pipe()
+            let out = Pipe()
             task.standardOutput = out
-            task.standardError = err
+            task.standardError = Pipe()
             do {
                 try task.run()
                 task.waitUntilExit()
             } catch {
-                twLog.info("[TrashWatcher] task.run failed: \(error)")
                 return
             }
-            let stdoutText = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            let stderrText = String(data: err.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
-            twLog.info("[TrashWatcher] exit=\(task.terminationStatus) out=\(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines).debugDescription) err=\(stderrText.trimmingCharacters(in: .whitespacesAndNewlines).debugDescription)")
+            let text = String(data: out.fileHandleForReading.readDataToEndOfFile(), encoding: .utf8) ?? ""
             guard task.terminationStatus == 0,
-                  let count = Int(stdoutText.trimmingCharacters(in: .whitespacesAndNewlines))
+                  let count = Int(text.trimmingCharacters(in: .whitespacesAndNewlines))
             else { return }
             let isEmpty = count == 0
             DispatchQueue.main.async {
                 if AppLibrary.shared.trashIsEmpty != isEmpty {
                     AppLibrary.shared.trashIsEmpty = isEmpty
-                    twLog.info("[TrashWatcher] published isEmpty=\(isEmpty)")
                 }
             }
         }
