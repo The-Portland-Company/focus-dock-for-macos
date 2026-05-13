@@ -454,6 +454,7 @@ struct DockView: View {
         .environment(\.dockIsVertical, isVertical)
         .environment(\.dockMagnifyEnabled, prefs.magnifyOnHover)
         .environment(\.dockMagnifyMax, magnifyMax)
+        .environment(\.dockLeadingPad, CGFloat(isVertical ? prefs.paddingTop : prefs.paddingLeft))
     }
 
     @ViewBuilder private func itemViews(iconSize: CGFloat, spacing: CGFloat) -> some View {
@@ -498,6 +499,7 @@ private struct DockHoverPointKey: EnvironmentKey { static let defaultValue: CGPo
 private struct DockIsVerticalKey: EnvironmentKey { static let defaultValue: Bool = false }
 private struct DockMagnifyEnabledKey: EnvironmentKey { static let defaultValue: Bool = true }
 private struct DockMagnifyMaxKey: EnvironmentKey { static let defaultValue: CGFloat = 110 }
+private struct DockLeadingPadKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
 
 extension EnvironmentValues {
     var dockHoverPoint: CGPoint? {
@@ -515,6 +517,10 @@ extension EnvironmentValues {
     var dockMagnifyMax: CGFloat {
         get { self[DockMagnifyMaxKey.self] }
         set { self[DockMagnifyMaxKey.self] = newValue }
+    }
+    var dockLeadingPad: CGFloat {
+        get { self[DockLeadingPadKey.self] }
+        set { self[DockLeadingPadKey.self] = newValue }
     }
 }
 
@@ -554,12 +560,23 @@ struct DockItemView: View {
     @Environment(\.dockIsVertical) private var isVertical
     @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
     @Environment(\.dockMagnifyMax) private var magnifyMax
+    @Environment(\.dockLeadingPad) private var leadingPad
+
+    /// Resting center of this item along the dock axis. Derived purely from
+    /// layout inputs (padding + index*(icon+spacing) + icon/2) so that
+    /// neighbor magnification — which reflows the HStack/VStack — does NOT
+    /// change this item's own scale. Using the live `frameInDock` here caused
+    /// a feedback loop (neighbor scales → cell width grows → this item's
+    /// frame shifts → this item's scale recomputes → neighbors shift again),
+    /// which produced the glitchy/blinky magnification animation.
+    private var restingCenterAlongAxis: CGFloat {
+        leadingPad + CGFloat(index) * (iconSize + spacing) + iconSize / 2
+    }
 
     private var magnificationScale: CGFloat {
-        guard magnifyEnabled, let hp = hoverPoint, frameInDock != .zero else { return 1 }
-        let center = isVertical ? frameInDock.midY : frameInDock.midX
+        guard magnifyEnabled, let hp = hoverPoint else { return 1 }
         let mouse = isVertical ? hp.y : hp.x
-        let dist = abs(mouse - center)
+        let dist = abs(mouse - restingCenterAlongAxis)
         // Falloff over ~2.5x the icon size
         let sigma = iconSize * 1.6
         let g = exp(-(dist * dist) / (2 * sigma * sigma))
