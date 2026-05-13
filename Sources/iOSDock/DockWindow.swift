@@ -86,16 +86,16 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let useFlush = prefs.flushBottom
         let area: NSRect = useFlush ? screen.frame : screen.visibleFrame
 
-        let pt = CGFloat(prefs.paddingTop), pb = CGFloat(prefs.paddingBottom)
-        let pl = CGFloat(prefs.paddingLeft), pr = CGFloat(prefs.paddingRight)
+        let pt = CGFloat(prefs.effectivePaddingTop), pb = CGFloat(prefs.effectivePaddingBottom)
+        let pl = CGFloat(prefs.effectivePaddingLeft), pr = CGFloat(prefs.effectivePaddingRight)
         let offset = CGFloat(prefs.edgeOffset)
 
         let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0))
-        let iconSize = CGFloat(prefs.iconSize)
-        let spacing = CGFloat(prefs.spacing)
+        let iconSize = CGFloat(prefs.effectiveIconSize)
+        let spacing = CGFloat(prefs.effectiveSpacing)
         let isVerticalEdge = (edge == .left || edge == .right)
-        let perpInside = CGFloat(isVerticalEdge ? prefs.paddingLeft + prefs.paddingRight : prefs.paddingLeft + prefs.paddingRight)
-        let perpAlongAxis = CGFloat(isVerticalEdge ? prefs.paddingTop + prefs.paddingBottom : prefs.paddingLeft + prefs.paddingRight)
+        let perpInside = CGFloat(isVerticalEdge ? prefs.effectivePaddingLeft + prefs.effectivePaddingRight : prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
+        let perpAlongAxis = CGFloat(isVerticalEdge ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
         let totalIcons = CGFloat(count) * iconSize + CGFloat(max(0, count - 1)) * spacing
 
         // The icons may be compressed to fit; the *effective* icon size is what
@@ -109,7 +109,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let desiredAlong = totalIcons
         let alongScale: CGFloat = desiredAlong <= maxAlong ? 1 : max(0.4, maxAlong / desiredAlong)
         let effectiveIcon = iconSize * alongScale
-        let magnified = prefs.magnifyOnHover ? CGFloat(prefs.magnifySize) : effectiveIcon
+        let magnified = prefs.magnifyOnHover ? CGFloat(prefs.effectiveMagnifySize) : effectiveIcon
 
         // Dock thickness = (magnified icon head-room) + (perpendicular padding) + small inset.
         let thicknessHorizontal = max(magnified, effectiveIcon) + pt + pb + 8
@@ -294,9 +294,9 @@ struct DockView: View {
     @StateObject private var dragState = DragState()
     @State private var hoverPoint: CGPoint? = nil
 
-    private var iconSize: CGFloat { CGFloat(prefs.iconSize) }
-    private var spacing: CGFloat { CGFloat(prefs.spacing) }
-    private var magnifyMax: CGFloat { CGFloat(prefs.magnifySize) }
+    private var iconSize: CGFloat { CGFloat(prefs.effectiveIconSize) }
+    private var spacing: CGFloat { CGFloat(prefs.effectiveSpacing) }
+    private var magnifyMax: CGFloat { CGFloat(prefs.effectiveMagnifySize) }
 
     private var isVertical: Bool {
         prefs.edge == .left || prefs.edge == .right
@@ -318,7 +318,7 @@ struct DockView: View {
     /// Effective per-icon scale to fit content within the dock window length.
     private func effectiveScale(in available: CGFloat) -> CGFloat {
         let n = max(1, renderedItems.count)
-        let interior = max(0, available - CGFloat(isVertical ? prefs.paddingTop + prefs.paddingBottom : prefs.paddingLeft + prefs.paddingRight))
+        let interior = max(0, available - CGFloat(isVertical ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight))
         let desired = CGFloat(n) * iconSize + CGFloat(max(0, n - 1)) * spacing
         if desired <= interior { return 1 }
         return max(0.4, interior / desired)
@@ -383,7 +383,7 @@ struct DockView: View {
     /// Resting thickness of the dock panel — used to keep the chrome size
     /// stable as icons magnify (only the icons grow, not the panel).
     private var restingThickness: CGFloat {
-        iconSize + CGFloat(isVertical ? prefs.paddingLeft + prefs.paddingRight : prefs.paddingTop + prefs.paddingBottom) + 8
+        iconSize + CGFloat(isVertical ? prefs.effectivePaddingLeft + prefs.effectivePaddingRight : prefs.effectivePaddingTop + prefs.effectivePaddingBottom) + 8
     }
 
     /// Alignment opposite the dock edge — used to park transient UI (e.g. the
@@ -404,7 +404,7 @@ struct DockView: View {
             let scaledIcon = iconSize * scale
             // When "Fill width" is on, compute spacing automatically so the icons
             // are evenly distributed across the available interior width.
-            let interior = max(0, avail - CGFloat(isVertical ? prefs.paddingTop + prefs.paddingBottom : prefs.paddingLeft + prefs.paddingRight))
+            let interior = max(0, avail - CGFloat(isVertical ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight))
             let n = max(1, renderedItems.count)
             let autoSpacing: CGFloat = n > 1 ? max(0, (interior - CGFloat(n) * scaledIcon) / CGFloat(n - 1)) : 0
             let scaledSpacing = prefs.fillWidth ? autoSpacing : spacing * scale
@@ -421,16 +421,16 @@ struct DockView: View {
                 Group {
                     if isVertical {
                         VStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
-                            .padding(.top, CGFloat(prefs.paddingTop))
-                            .padding(.bottom, CGFloat(prefs.paddingBottom))
-                            .padding(.leading, CGFloat(prefs.paddingLeft))
-                            .padding(.trailing, CGFloat(prefs.paddingRight))
+                            .padding(.top, CGFloat(prefs.effectivePaddingTop))
+                            .padding(.bottom, CGFloat(prefs.effectivePaddingBottom))
+                            .padding(.leading, CGFloat(prefs.effectivePaddingLeft))
+                            .padding(.trailing, CGFloat(prefs.effectivePaddingRight))
                     } else {
                         HStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
-                            .padding(.top, CGFloat(prefs.paddingTop))
-                            .padding(.bottom, CGFloat(prefs.paddingBottom))
-                            .padding(.leading, CGFloat(prefs.paddingLeft))
-                            .padding(.trailing, CGFloat(prefs.paddingRight))
+                            .padding(.top, CGFloat(prefs.effectivePaddingTop))
+                            .padding(.bottom, CGFloat(prefs.effectivePaddingBottom))
+                            .padding(.leading, CGFloat(prefs.effectivePaddingLeft))
+                            .padding(.trailing, CGFloat(prefs.effectivePaddingRight))
                     }
                 }
                 if prefs.isEditingLayout {
@@ -469,7 +469,7 @@ struct DockView: View {
         .environment(\.dockIsVertical, isVertical)
         .environment(\.dockMagnifyEnabled, prefs.magnifyOnHover)
         .environment(\.dockMagnifyMax, magnifyMax)
-        .environment(\.dockLeadingPad, CGFloat(isVertical ? prefs.paddingTop : prefs.paddingLeft))
+        .environment(\.dockLeadingPad, CGFloat(isVertical ? prefs.effectivePaddingTop : prefs.effectivePaddingLeft))
     }
 
     @ViewBuilder private func itemViews(iconSize: CGFloat, spacing: CGFloat) -> some View {
