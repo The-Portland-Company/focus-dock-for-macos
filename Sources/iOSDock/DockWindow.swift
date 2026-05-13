@@ -30,6 +30,7 @@ final class DockHostingController<Content: View>: NSHostingController<Content> {
 
 final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var prefsObserver: NSObjectProtocol?
+    private var screenObserver: NSObjectProtocol?
     private var snapWorkItem: DispatchWorkItem?
 
     // Auto-hide state. `shownFrame` is the laid-out frame as if the dock were
@@ -65,12 +66,21 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         prefsObserver = NotificationCenter.default.addObserver(
             forName: Preferences.changed, object: nil, queue: .main
         ) { [weak self] _ in self?.applyLayout() }
+        // Re-run layout when the screen's usable area changes — e.g. when the
+        // system Dock is hidden during launch (which shifts visibleFrame.minY),
+        // when displays are reconfigured, or when the menu bar's safe-area
+        // changes. Without this, the dock keeps its initial-launch frame and
+        // edgeOffset appears not to apply until the user nudges any pref.
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.applyLayout() }
         startAutoHideTimer()
     }
 
     deinit {
         autoHideTimer?.invalidate()
         if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
+        if let screenObserver { NotificationCenter.default.removeObserver(screenObserver) }
     }
 
     /// Compute the proper window size and origin for the configured edge.
