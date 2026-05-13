@@ -34,6 +34,7 @@ final class Preferences: ObservableObject {
     private let kShowRecents = "showRecentApps"
     private let kFillWidth = "fillWidth"
     private let kPaddingUniform = "paddingUniform"
+    private let kDockScale = "dockScale"
 
     init() {
         if defaults.object(forKey: kDockIcon) == nil { defaults.set(true, forKey: kDockIcon) }
@@ -63,6 +64,7 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: kShowRecents) == nil { defaults.set(false, forKey: kShowRecents) }
         if defaults.object(forKey: kFillWidth) == nil { defaults.set(false, forKey: kFillWidth) }
         if defaults.object(forKey: kPaddingUniform) == nil { defaults.set(false, forKey: kPaddingUniform) }
+        if defaults.object(forKey: kDockScale) == nil { defaults.set(1.0, forKey: kDockScale) }
         // Migrate older "margin" defaults to padding-appropriate values on first
         // launch with this build only.
         if !defaults.bool(forKey: "didMigratePadding") {
@@ -115,7 +117,7 @@ final class Preferences: ObservableObject {
              tintBackground, backgroundColor, showBorder, borderColor, borderWidth,
              edgeOffset, showFinder,
              autoHideDock, bounceOnLaunch, showRunningIndicators, showRecentApps,
-             fillWidth, paddingUniform
+             fillWidth, paddingUniform, dockScale
     }
 
     /// Plain-Any defaults for primitives; the RGBA ones are handled specially in `reset(_:)`.
@@ -129,7 +131,8 @@ final class Preferences: ObservableObject {
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
         .edgeOffset: 8.0, .showFinder: true,
         .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .showRecentApps: false,
-        .fillWidth: false, .paddingUniform: false
+        .fillWidth: false, .paddingUniform: false,
+        .dockScale: 1.0
     ]
 
     func reset(_ key: Key) {
@@ -323,6 +326,24 @@ final class Preferences: ObservableObject {
         get { defaults.double(forKey: kMagnifySize) }
         set { defaults.set(newValue, forKey: kMagnifySize); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
     }
+
+    /// Overall dock scale multiplier applied on top of icon size, spacing,
+    /// magnified size, and internal padding. 1.0 = no change.
+    var dockScale: Double {
+        get {
+            let v = defaults.double(forKey: kDockScale)
+            return v > 0 ? v : 1.0
+        }
+        set { defaults.set(newValue, forKey: kDockScale); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+
+    var effectiveIconSize: Double { iconSize * dockScale }
+    var effectiveSpacing: Double { spacing * dockScale }
+    var effectiveMagnifySize: Double { magnifySize * dockScale }
+    var effectivePaddingTop: Double { paddingTop * dockScale }
+    var effectivePaddingBottom: Double { paddingBottom * dockScale }
+    var effectivePaddingLeft: Double { paddingLeft * dockScale }
+    var effectivePaddingRight: Double { paddingRight * dockScale }
 
     var isEditingLayout: Bool {
         get { defaults.bool(forKey: kEditing) }

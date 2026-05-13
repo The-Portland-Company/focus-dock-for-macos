@@ -293,6 +293,19 @@ struct SettingsView: View {
                 }
             }
             Section("Appearance") {
+                settingRow(.dockScale) {
+                    HStack {
+                        Text("Dock size")
+                        Slider(value: Binding(
+                            get: { prefs.dockScale * 100 },
+                            set: { prefs.dockScale = $0 / 100 }
+                        ), in: 50...200, step: 1)
+                        EditableNumber(value: Binding(
+                            get: { prefs.dockScale * 100 },
+                            set: { prefs.dockScale = $0 / 100 }
+                        ), suffix: "%")
+                    }
+                }
                 settingRow(.iconSize) {
                     HStack {
                         Text("Icon size")
