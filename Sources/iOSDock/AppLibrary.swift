@@ -90,6 +90,11 @@ final class AppLibrary: ObservableObject {
     /// `BadgeMonitor` on the main thread. Not persisted.
     @Published var badgeStates: [String: AppBadgeState] = [:]
 
+    /// Bumped by `TrashWatcher` whenever `~/.Trash` contents change, so
+    /// SwiftUI re-evaluates the (uncached) Trash icon and swaps between
+    /// the empty- and full-bin bitmaps.
+    @Published var trashTick: Int = 0
+
     func badgeState(for appName: String) -> AppBadgeState? {
         badgeStates[appName.lowercased()]
     }
