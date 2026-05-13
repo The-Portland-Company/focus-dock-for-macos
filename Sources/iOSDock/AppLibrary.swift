@@ -59,8 +59,8 @@ final class IconCache {
             let isEmpty = contents.filter { !$0.hasPrefix(".") }.isEmpty
             let base = "/System/Library/CoreServices/Dock.app/Contents/Resources/"
             let candidates: [String] = isEmpty
-                ? ["trashempty@2x.png", "trashempty.png"]
-                : ["trashfull@2x.png", "trashfull.png"]
+                ? ["trashempty2@2x.png", "trashempty2.png", "trashempty@2x.png", "trashempty.png"]
+                : ["trashfull2@2x.png", "trashfull2.png", "trashfull@2x.png", "trashfull.png"]
             for file in candidates {
                 if let img = NSImage(contentsOfFile: base + file) { return img }
             }
