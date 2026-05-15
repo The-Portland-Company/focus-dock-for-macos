@@ -17,9 +17,15 @@ struct FocusDockApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var dockWindow: DockWindowController?
+    /// Primary dock window (also tracked in `dockWindows[0]`). Kept as a
+    /// backwards-compatible alias for code paths that need "any" dock — e.g.
+    /// the menu-bar "Show Dock" command.
+    var dockWindow: DockWindowController? { dockWindows.first }
+    var dockWindows: [DockWindowController] = []
+    private var screenObserver: NSObjectProtocol?
     var statusItem: NSStatusItem?
     private var prefsObserver: NSObjectProtocol?
+    private var profilesObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NotificationCenter.default.addObserver(
@@ -29,9 +35,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSWindow.didUpdateNotification, object: nil, queue: .main
         ) { _ in Self.makeSettingsWindowResizable() }
 
-        // Show dock window
-        dockWindow = DockWindowController()
-        dockWindow?.showWindow(nil)
+        // Show dock window(s) for the active profile's screen assignment.
+        rebuildDockWindows()
+        // Rebuild when the user switches profile (changes screen assignment) or
+        // when displays are added/removed/reconfigured.
+        NotificationCenter.default.addObserver(
+            forName: ProfileManager.activeChanged, object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuildDockWindows() }
+        NotificationCenter.default.addObserver(
+            forName: ProfileManager.listChanged, object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuildDockWindows() }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuildDockWindows() }
 
         applyPresentationMode()
         installStatusItemIfNeeded()
@@ -75,6 +91,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             self?.applyPresentationMode()
             self?.installStatusItemIfNeeded()
+        }
+
+        profilesObserver = NotificationCenter.default.addObserver(
+            forName: ProfileManager.listChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.rebuildStatusItemMenu()
+        }
+        NotificationCenter.default.addObserver(
+            forName: ProfileManager.activeChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.rebuildStatusItemMenu()
         }
 
         // Open Settings window on first launch
@@ -126,22 +153,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let button = item.button {
                     button.image = NSImage(systemSymbolName: "square.grid.2x2.fill", accessibilityDescription: "Focus: Dock")
                 }
-                let menu = NSMenu()
-                menu.addItem(withTitle: "Show Dock", action: #selector(showDock), keyEquivalent: "d").target = self
-                let editItem = NSMenuItem(title: "Edit Layout (drag dock to an edge)", action: #selector(toggleEditLayout), keyEquivalent: "e")
-                editItem.target = self
-                editItem.state = Preferences.shared.isEditingLayout ? .on : .off
-                menu.addItem(editItem)
-                menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
-                menu.addItem(.separator())
-                menu.addItem(withTitle: "Quit Focus: Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-                item.menu = menu
+                item.menu = buildStatusMenu()
                 statusItem = item
             }
         } else if let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
         }
+    }
+
+    private func buildStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Show Dock", action: #selector(showDock), keyEquivalent: "d").target = self
+        let editItem = NSMenuItem(title: "Edit Layout (drag dock to an edge)", action: #selector(toggleEditLayout), keyEquivalent: "e")
+        editItem.target = self
+        editItem.state = Preferences.shared.isEditingLayout ? .on : .off
+        menu.addItem(editItem)
+
+        menu.addItem(.separator())
+
+        // Profiles submenu
+        let profilesItem = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
+        let sub = NSMenu(title: "Profile")
+        let mgr = ProfileManager.shared
+        for p in mgr.profiles {
+            let mi = NSMenuItem(title: p.name, action: #selector(selectProfile(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = p.id.uuidString
+            mi.state = (p.id == mgr.activeProfileID) ? .on : .off
+            sub.addItem(mi)
+        }
+        sub.addItem(.separator())
+        sub.addItem(withTitle: "New Profile…", action: #selector(newProfile), keyEquivalent: "").target = self
+        sub.addItem(withTitle: "Duplicate Current Profile…", action: #selector(duplicateProfile), keyEquivalent: "").target = self
+        sub.addItem(withTitle: "Rename Current Profile…", action: #selector(renameProfile), keyEquivalent: "").target = self
+        let del = NSMenuItem(title: "Delete Current Profile", action: #selector(deleteProfile), keyEquivalent: "")
+        del.target = self
+        del.isEnabled = mgr.profiles.count > 1
+        sub.addItem(del)
+        profilesItem.submenu = sub
+        menu.addItem(profilesItem)
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit Focus: Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        return menu
+    }
+
+    private func rebuildStatusItemMenu() {
+        statusItem?.menu = buildStatusMenu()
+    }
+
+    @objc func selectProfile(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String, let uuid = UUID(uuidString: s) else { return }
+        ProfileManager.shared.setActiveProfile(uuid)
+    }
+
+    @objc func newProfile() {
+        guard let name = promptForString(title: "New Profile", message: "Name for the new profile:", defaultValue: "New Profile") else { return }
+        ProfileManager.shared.addProfile(name: name)
+    }
+
+    @objc func duplicateProfile() {
+        let current = ProfileManager.shared.activeProfile
+        guard let name = promptForString(title: "Duplicate Profile", message: "Name for the copy of \(current.name):", defaultValue: current.name + " Copy") else { return }
+        ProfileManager.shared.addProfile(name: name, duplicateFrom: current.id)
+    }
+
+    @objc func renameProfile() {
+        let current = ProfileManager.shared.activeProfile
+        guard let name = promptForString(title: "Rename Profile", message: "New name:", defaultValue: current.name) else { return }
+        ProfileManager.shared.renameProfile(current.id, to: name)
+    }
+
+    @objc func deleteProfile() {
+        let mgr = ProfileManager.shared
+        guard mgr.profiles.count > 1 else { return }
+        let current = mgr.activeProfile
+        let alert = NSAlert()
+        alert.messageText = "Delete profile \"\(current.name)\"?"
+        alert.informativeText = "This removes its pinned apps and dock settings. This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            mgr.deleteProfile(current.id)
+        }
+    }
+
+    private func promptForString(title: String, message: String, defaultValue: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        tf.stringValue = defaultValue
+        alert.accessoryView = tf
+        // Focus the text field on present.
+        DispatchQueue.main.async { alert.window.makeFirstResponder(tf) }
+        let resp = alert.runModal()
+        guard resp == .alertFirstButtonReturn else { return nil }
+        let v = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return v.isEmpty ? nil : v
     }
 
     @objc func toggleEditLayout() {
@@ -164,8 +279,61 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showDock() {
-        dockWindow?.showWindow(nil)
-        dockWindow?.forceReveal()
+        for dock in dockWindows {
+            dock.showWindow(nil)
+            dock.forceReveal()
+        }
+    }
+
+    /// Tear down and recreate the dock windows based on the active profile's
+    /// `ScreenAssignment` and the currently-connected `NSScreen.screens`. Called
+    /// at launch, on profile switch / list change, and when displays are
+    /// reconfigured.
+    func rebuildDockWindows() {
+        // Close existing.
+        for dock in dockWindows { dock.close() }
+        dockWindows.removeAll()
+
+        let mgr = ProfileManager.shared
+        let activeDocks = mgr.activeDocks
+        guard !activeDocks.isEmpty else {
+            // No docks at all — bootstrap one on the main screen.
+            if let main = NSScreen.main {
+                let fallbackID = mgr.docks.first?.id ?? UUID()
+                let ctrl = DockWindowController(dockID: fallbackID, targetScreen: main)
+                ctrl.showWindow(nil)
+                dockWindows.append(ctrl)
+            }
+            return
+        }
+        for dock in activeDocks {
+            let screens = targetScreens(for: dock.screen)
+            if screens.isEmpty {
+                // Pinned screen disconnected — fall back to main so the user
+                // doesn't end up with this dock invisible.
+                if let main = NSScreen.main {
+                    let ctrl = DockWindowController(dockID: dock.id, targetScreen: main)
+                    ctrl.showWindow(nil)
+                    dockWindows.append(ctrl)
+                }
+                continue
+            }
+            for screen in screens {
+                let ctrl = DockWindowController(dockID: dock.id, targetScreen: screen)
+                ctrl.showWindow(nil)
+                dockWindows.append(ctrl)
+            }
+        }
+    }
+
+    private func targetScreens(for assignment: ScreenAssignment) -> [NSScreen] {
+        switch assignment {
+        case .allScreens: return NSScreen.screens
+        case .main: return NSScreen.main.map { [$0] } ?? []
+        case .specific(let uuid, _):
+            if let s = ScreenIdentity.screen(forUUID: uuid) { return [s] }
+            return []
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

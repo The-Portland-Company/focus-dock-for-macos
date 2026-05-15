@@ -36,6 +36,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var minimizedSubscription: Any?
     private var runningAppsSubscription: Any?
     private var snapWorkItem: DispatchWorkItem?
+    private var cancellables: Set<AnyCancellable> = []
 
     // Auto-hide state. `shownFrame` is the laid-out frame as if the dock were
     // visible; the window itself may be parked at `hiddenFrame(for:)` instead.
@@ -48,10 +49,33 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     /// for the user to mouse over it before it parks itself again.
     private var suppressHideUntil: Date = .distantPast
 
-    convenience init() {
+    /// When non-nil, this dock window is pinned to a specific screen. All
+    /// layout calculations (frame, hidden frame, reveal zone) use this screen
+    /// instead of falling back to `NSScreen.main`. Setting this also moves the
+    /// window onto the target screen at init.
+    var targetScreen: NSScreen?
+
+    /// The DockInstance this controller renders. Each controller has its own
+    /// `Preferences` and `AppLibrary` instance pinned to this dock so multiple
+    /// docks can run simultaneously with independent settings + items.
+    let dockID: UUID
+    let prefs: Preferences
+    let library: AppLibrary
+
+    private var activeScreen: NSScreen? {
+        targetScreen ?? NSScreen.main ?? window?.screen
+    }
+
+    init(dockID: UUID, targetScreen: NSScreen? = nil) {
+        let prefs = Preferences(dockID: dockID)
+        let library = AppLibrary(dockID: dockID)
+        self.dockID = dockID
+        self.prefs = prefs
+        self.library = library
+
         let content = DockView()
-            .environmentObject(AppLibrary.shared)
-            .environmentObject(Preferences.shared)
+            .environmentObject(library)
+            .environmentObject(prefs)
         let host = DockHostingController(rootView: content)
 
         let win = NSPanel(
@@ -67,13 +91,21 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         win.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
         win.contentViewController = host
 
-        self.init(window: win)
+        super.init(window: win)
+        self.targetScreen = targetScreen
         win.delegate = self
         DockTooltipPanel.dockWindow = win
         applyLayout()
+        // Re-layout on any settings change (cheap and idempotent — we read our
+        // own per-dock prefs, so other docks' edits don't actually move us).
         prefsObserver = NotificationCenter.default.addObserver(
             forName: Preferences.changed, object: nil, queue: .main
         ) { [weak self] _ in self?.applyLayout() }
+        // Re-layout when our own items change (other dock instances' changes
+        // are filtered out by dockID match in AppLibrary itself).
+        library.objectWillChange.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.applyLayout() }
+        }.store(in: &cancellables)
         // Re-run layout when the screen's usable area changes — e.g. when the
         // system Dock is hidden during launch (which shifts visibleFrame.minY),
         // when displays are reconfigured, or when the menu bar's safe-area
@@ -93,6 +125,8 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         startAutoHideTimer()
     }
 
+    required init?(coder: NSCoder) { fatalError("init(coder:) is not supported") }
+
     deinit {
         autoHideTimer?.invalidate()
         if let prefsObserver { NotificationCenter.default.removeObserver(prefsObserver) }
@@ -101,13 +135,13 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
 
     /// Compute the proper window size and origin for the configured edge.
     func applyLayout() {
-        guard let win = window, let screen = (NSScreen.main ?? win.screen) else { return }
-        let edge = Preferences.shared.edge
-        let isEditing = Preferences.shared.isEditingLayout
+        guard let win = window, let screen = activeScreen else { return }
+        let edge = self.prefs.edge
+        let isEditing = self.prefs.isEditingLayout
         win.isMovableByWindowBackground = isEditing
         win.isMovable = isEditing
 
-        let prefs = Preferences.shared
+        let prefs = self.prefs
         // Flush works on any edge now — uses full screen.frame and ignores
         // edgeOffset on that edge. (Pref key kept as "flushBottom" for storage.)
         let useFlush = prefs.flushBottom
@@ -121,7 +155,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let runningCount = RunningAppsMonitor.shared.apps.count
         // +1 for each divider that's present (one before running apps, one before minimized).
         let dividerCount = (mins > 0 ? 1 : 0) + (runningCount > 0 ? 1 : 0)
-        let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0) + mins + runningCount + dividerCount)
+        let count = max(1, self.library.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0) + mins + runningCount + dividerCount)
         let iconSize = CGFloat(prefs.effectiveIconSize)
         let spacing = CGFloat(prefs.effectiveSpacing)
         let isVerticalEdge = (edge == .left || edge == .right)
@@ -208,12 +242,13 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func evaluateAutoHide() {
-        let prefs = Preferences.shared
+        let prefs = self.prefs
         guard prefs.autoHideDock, !prefs.isEditingLayout else {
             if isAutoHidden { reveal() }
             return
         }
-        guard let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        guard let win = window, let screen = activeScreen else { return }
+        _ = win
         let mouse = NSEvent.mouseLocation
         let edge = prefs.edge
         if isAutoHidden {
@@ -253,7 +288,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let work = DispatchWorkItem { [weak self] in
             guard let self else { return }
             self.hideWorkItem = nil
-            let prefs = Preferences.shared
+            let prefs = self.prefs
             guard prefs.autoHideDock, !prefs.isEditingLayout else { return }
             // Re-check the cursor position at fire-time so a quick re-entry
             // cancels the hide.
@@ -265,10 +300,10 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func hide() {
-        guard !isAutoHidden, let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        guard !isAutoHidden, let win = window, let screen = activeScreen else { return }
         isAutoHidden = true
         DockTooltipPanel.shared.hideAll()
-        let target = hiddenFrame(from: shownFrame, edge: Preferences.shared.edge, on: screen)
+        let target = hiddenFrame(from: shownFrame, edge: self.prefs.edge, on: screen)
         NSAnimationContext.runAnimationGroup { ctx in
             ctx.duration = 0.18
             ctx.allowsImplicitAnimation = true
@@ -314,7 +349,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
 
     // Live snap-to-nearest-edge while dragging in edit mode.
     func windowDidMove(_ notification: Notification) {
-        guard Preferences.shared.isEditingLayout, let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        guard self.prefs.isEditingLayout, let win = window, let screen = activeScreen else { return }
         snapWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }
@@ -330,8 +365,8 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
                 minDist == dBottom ? .bottom :
                 minDist == dTop ? .top :
                 minDist == dLeft ? .left : .right
-            if newEdge != Preferences.shared.edge {
-                Preferences.shared.edge = newEdge // triggers applyLayout via observer
+            if newEdge != self.prefs.edge {
+                self.prefs.edge = newEdge // triggers applyLayout via observer
             } else {
                 self.applyLayout()
             }
