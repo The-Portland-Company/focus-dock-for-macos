@@ -254,35 +254,6 @@ function Features() {
   );
 }
 
-function Screenshots() {
-  const subtle = useColorModeValue("gray.600", "gray.400");
-  return (
-    <Box bg={useColorModeValue("blackAlpha.50", "whiteAlpha.50")} py={{ base: 16, md: 24 }}>
-      <Container maxW="6xl">
-        <VStack spacing={4} textAlign="center" mb={12}>
-          <Heading size="xl" letterSpacing="-0.02em">
-            Tune it until it disappears.
-          </Heading>
-          <Text fontSize="lg" color={subtle} maxW="2xl">
-            Light, dark, flush, floating, big, tiny. The Settings panel has
-            a slider for every detail — and a reset arrow next to each one.
-          </Text>
-        </VStack>
-        <Stack spacing={6}>
-          <ScreenshotFrame
-            src="/screenshots/settings.png"
-            alt="Focus Dock Settings panel"
-          />
-          <ScreenshotFrame
-            src="/screenshots/dock-only.png"
-            alt="Focus Dock rendered at the bottom of the screen"
-          />
-        </Stack>
-      </Container>
-    </Box>
-  );
-}
-
 function Download() {
   const cardBg = useColorModeValue("white", "whiteAlpha.50");
   const cardBorder = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
@@ -360,7 +331,6 @@ export default function App() {
       <Nav />
       <Hero />
       <Features />
-      <Screenshots />
       <Download />
       <Footer />
     </Box>
