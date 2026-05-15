@@ -109,16 +109,33 @@ final class AppLibrary: ObservableObject {
         badgeStates[appName.lowercased()]
     }
 
-    private let storageURL: URL = {
-        let dir = FileManager.default.urls(for: .applicationSupportDirectory, in: .userDomainMask)[0]
-            .appendingPathComponent("FocusDock", isDirectory: true)
-        try? FileManager.default.createDirectory(at: dir, withIntermediateDirectories: true)
-        return dir.appendingPathComponent("library.json")
-    }()
+    private var storageURL: URL {
+        ProfileManager.shared.libraryURL(for: ProfileManager.shared.activeID)
+    }
+
+    private var suppressSave: Bool = false
 
     init() {
+        // Ensure ProfileManager has run its bootstrap + legacy migration first
+        // so storageURL points at the active profile's library.json.
+        _ = ProfileManager.shared
         load()
         if items.isEmpty { seedDefaults() }
+
+        NotificationCenter.default.addObserver(
+            self, selector: #selector(handleActiveProfileChanged),
+            name: ProfileManager.activeChanged, object: nil)
+    }
+
+    @objc private func handleActiveProfileChanged() {
+        // Load the new profile's items without triggering save() (didSet) which
+        // would write the new profile's data into… the new profile's file. That's
+        // actually fine, but we avoid pointless I/O.
+        suppressSave = true
+        items = []
+        load()
+        if items.isEmpty { seedDefaults() }
+        suppressSave = false
     }
 
     // MARK: - Persistence
@@ -129,6 +146,7 @@ final class AppLibrary: ObservableObject {
     }
 
     private func save() {
+        if suppressSave { return }
         let persisted: [PersistedItem] = items.map { item in
             switch item {
             case .app(let a): return PersistedItem(kind: "app", app: a, folder: nil)

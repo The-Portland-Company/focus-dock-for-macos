@@ -20,6 +20,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var dockWindow: DockWindowController?
     var statusItem: NSStatusItem?
     private var prefsObserver: NSObjectProtocol?
+    private var profilesObserver: NSObjectProtocol?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NotificationCenter.default.addObserver(
@@ -77,6 +78,17 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.installStatusItemIfNeeded()
         }
 
+        profilesObserver = NotificationCenter.default.addObserver(
+            forName: ProfileManager.listChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.rebuildStatusItemMenu()
+        }
+        NotificationCenter.default.addObserver(
+            forName: ProfileManager.activeChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.rebuildStatusItemMenu()
+        }
+
         // Open Settings window on first launch
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             self.openSettings()
@@ -126,22 +138,110 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
                 if let button = item.button {
                     button.image = NSImage(systemSymbolName: "square.grid.2x2.fill", accessibilityDescription: "Focus: Dock")
                 }
-                let menu = NSMenu()
-                menu.addItem(withTitle: "Show Dock", action: #selector(showDock), keyEquivalent: "d").target = self
-                let editItem = NSMenuItem(title: "Edit Layout (drag dock to an edge)", action: #selector(toggleEditLayout), keyEquivalent: "e")
-                editItem.target = self
-                editItem.state = Preferences.shared.isEditingLayout ? .on : .off
-                menu.addItem(editItem)
-                menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
-                menu.addItem(.separator())
-                menu.addItem(withTitle: "Quit Focus: Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
-                item.menu = menu
+                item.menu = buildStatusMenu()
                 statusItem = item
             }
         } else if let item = statusItem {
             NSStatusBar.system.removeStatusItem(item)
             statusItem = nil
         }
+    }
+
+    private func buildStatusMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Show Dock", action: #selector(showDock), keyEquivalent: "d").target = self
+        let editItem = NSMenuItem(title: "Edit Layout (drag dock to an edge)", action: #selector(toggleEditLayout), keyEquivalent: "e")
+        editItem.target = self
+        editItem.state = Preferences.shared.isEditingLayout ? .on : .off
+        menu.addItem(editItem)
+
+        menu.addItem(.separator())
+
+        // Profiles submenu
+        let profilesItem = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
+        let sub = NSMenu(title: "Profile")
+        let mgr = ProfileManager.shared
+        for p in mgr.profiles {
+            let mi = NSMenuItem(title: p.name, action: #selector(selectProfile(_:)), keyEquivalent: "")
+            mi.target = self
+            mi.representedObject = p.id.uuidString
+            mi.state = (p.id == mgr.activeID) ? .on : .off
+            sub.addItem(mi)
+        }
+        sub.addItem(.separator())
+        sub.addItem(withTitle: "New Profile…", action: #selector(newProfile), keyEquivalent: "").target = self
+        sub.addItem(withTitle: "Duplicate Current Profile…", action: #selector(duplicateProfile), keyEquivalent: "").target = self
+        sub.addItem(withTitle: "Rename Current Profile…", action: #selector(renameProfile), keyEquivalent: "").target = self
+        let del = NSMenuItem(title: "Delete Current Profile", action: #selector(deleteProfile), keyEquivalent: "")
+        del.target = self
+        del.isEnabled = mgr.profiles.count > 1
+        sub.addItem(del)
+        profilesItem.submenu = sub
+        menu.addItem(profilesItem)
+
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
+        menu.addItem(.separator())
+        menu.addItem(withTitle: "Quit Focus: Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        return menu
+    }
+
+    private func rebuildStatusItemMenu() {
+        statusItem?.menu = buildStatusMenu()
+    }
+
+    @objc func selectProfile(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String, let uuid = UUID(uuidString: s) else { return }
+        ProfileManager.shared.setActive(uuid)
+    }
+
+    @objc func newProfile() {
+        guard let name = promptForString(title: "New Profile", message: "Name for the new profile:", defaultValue: "New Profile") else { return }
+        ProfileManager.shared.addProfile(name: name)
+    }
+
+    @objc func duplicateProfile() {
+        let current = ProfileManager.shared.active
+        guard let name = promptForString(title: "Duplicate Profile", message: "Name for the copy of \(current.name):", defaultValue: current.name + " Copy") else { return }
+        ProfileManager.shared.addProfile(name: name, duplicateFrom: current.id)
+    }
+
+    @objc func renameProfile() {
+        let current = ProfileManager.shared.active
+        guard let name = promptForString(title: "Rename Profile", message: "New name:", defaultValue: current.name) else { return }
+        ProfileManager.shared.renameProfile(current.id, to: name)
+    }
+
+    @objc func deleteProfile() {
+        let mgr = ProfileManager.shared
+        guard mgr.profiles.count > 1 else { return }
+        let current = mgr.active
+        let alert = NSAlert()
+        alert.messageText = "Delete profile \"\(current.name)\"?"
+        alert.informativeText = "This removes its pinned apps and dock settings. This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Delete")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            mgr.deleteProfile(current.id)
+        }
+    }
+
+    private func promptForString(title: String, message: String, defaultValue: String) -> String? {
+        let alert = NSAlert()
+        alert.messageText = title
+        alert.informativeText = message
+        alert.addButton(withTitle: "OK")
+        alert.addButton(withTitle: "Cancel")
+        let tf = NSTextField(frame: NSRect(x: 0, y: 0, width: 260, height: 24))
+        tf.stringValue = defaultValue
+        alert.accessoryView = tf
+        // Focus the text field on present.
+        DispatchQueue.main.async { alert.window.makeFirstResponder(tf) }
+        let resp = alert.runModal()
+        guard resp == .alertFirstButtonReturn else { return nil }
+        let v = tf.stringValue.trimmingCharacters(in: .whitespacesAndNewlines)
+        return v.isEmpty ? nil : v
     }
 
     @objc func toggleEditLayout() {

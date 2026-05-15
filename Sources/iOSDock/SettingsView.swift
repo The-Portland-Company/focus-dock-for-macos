@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-enum SettingsTab: String { case about, general, apps }
+enum SettingsTab: String { case about, general, apps, profiles }
 
 struct SettingsView: View {
     @EnvironmentObject var library: AppLibrary
@@ -32,6 +32,9 @@ struct SettingsView: View {
                 appsTab
                     .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
                     .tag(SettingsTab.apps)
+                ProfilesTab()
+                    .tabItem { Label("Profiles", systemImage: "person.2.circle") }
+                    .tag(SettingsTab.profiles)
             }
             .padding()
         }
