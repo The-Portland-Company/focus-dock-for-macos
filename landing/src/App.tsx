@@ -1,4 +1,5 @@
 import {
+  Badge,
   Box,
   Button,
   Container,
@@ -7,18 +8,30 @@ import {
   Heading,
   IconButton,
   Image,
+  Modal,
+  ModalBody,
+  ModalCloseButton,
+  ModalContent,
+  ModalHeader,
+  ModalOverlay,
   SimpleGrid,
   Stack,
   Text,
   VStack,
+  useClipboard,
   useColorMode,
   useColorModeValue,
+  useDisclosure,
   Icon,
   Link,
   Tag,
 } from "@chakra-ui/react";
 import {
+  FiCheck,
+  FiCopy,
+  FiDollarSign,
   FiDownload,
+  FiHeart,
   FiMoon,
   FiSun,
   FiFolder,
@@ -29,11 +42,19 @@ import {
   FiLayers,
   FiSettings,
 } from "react-icons/fi";
+import {
+  SiCashapp,
+  SiPaypal,
+  SiVenmo,
+  SiZelle,
+} from "react-icons/si";
+import { FaEthereum } from "react-icons/fa";
+import type { IconType } from "react-icons";
 
 const APP_VERSION = "0.3.2";
 const DMG_URL = `/FocusDock-${APP_VERSION}.dmg`;
 
-function Nav() {
+function Nav({ onDonate }: { onDonate: () => void }) {
   const { colorMode, toggleColorMode } = useColorMode();
   const bg = useColorModeValue("whiteAlpha.800", "blackAlpha.600");
   return (
@@ -63,6 +84,14 @@ function Nav() {
             </Tag>
           </HStack>
           <HStack spacing={2}>
+            <Button
+              size="sm"
+              variant="ghost"
+              leftIcon={<FiHeart />}
+              onClick={onDonate}
+            >
+              Donate
+            </Button>
             <Button
               as="a"
               href={DMG_URL}
@@ -295,7 +324,7 @@ function Download() {
   );
 }
 
-function Footer() {
+function Footer({ onDonate }: { onDonate: () => void }) {
   const subtle = useColorModeValue("gray.600", "gray.400");
   const border = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
   return (
@@ -318,6 +347,9 @@ function Footer() {
               GitHub
             </Link>
             <Link href={DMG_URL}>Download</Link>
+            <Link as="button" onClick={onDonate}>
+              Donate
+            </Link>
           </HStack>
         </Flex>
       </Container>
@@ -325,14 +357,164 @@ function Footer() {
   );
 }
 
+type PaymentMethod = {
+  name: string;
+  value: string;
+  icon: IconType;
+  bg: string;
+  iconColor?: string;
+  preferred?: boolean;
+  href?: string;
+};
+
+const PAYMENT_METHODS: PaymentMethod[] = [
+  {
+    name: "Cash",
+    value: "Contact us to arrange payment",
+    icon: FiDollarSign,
+    bg: "#10b981",
+    preferred: true,
+  },
+  {
+    name: "PayPal",
+    value: "thespencerhill@gmail.com",
+    icon: SiPaypal,
+    bg: "#003087",
+    href: "https://paypal.me/thespencerhill",
+  },
+  {
+    name: "Venmo",
+    value: "@spencerdennishill",
+    icon: SiVenmo,
+    bg: "#3D95CE",
+    href: "https://venmo.com/spencerdennishill",
+  },
+  {
+    name: "Cash App",
+    value: "$spencerdennishill",
+    icon: SiCashapp,
+    bg: "#00D632",
+    href: "https://cash.app/$spencerdennishill",
+  },
+  {
+    name: "Zelle",
+    value: "503-610-8759",
+    icon: SiZelle,
+    bg: "#6D1ED4",
+  },
+  {
+    name: "MetaMask",
+    value: "0xc882b4019011d6e34170485F54B3853Cbbd92f8A",
+    icon: FaEthereum,
+    bg: "#F6851B",
+  },
+];
+
+function PaymentRow({ method }: { method: PaymentMethod }) {
+  const { hasCopied, onCopy } = useClipboard(method.value);
+  const rowBg = useColorModeValue("blackAlpha.50", "whiteAlpha.50");
+  const rowBorder = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
+  const subtle = useColorModeValue("gray.600", "gray.400");
+  return (
+    <Flex
+      align="center"
+      gap={4}
+      p={4}
+      bg={rowBg}
+      borderWidth="1px"
+      borderColor={rowBorder}
+      borderRadius="xl"
+    >
+      <Flex
+        flexShrink={0}
+        boxSize="44px"
+        borderRadius="full"
+        bg={method.bg}
+        align="center"
+        justify="center"
+      >
+        <Icon as={method.icon} boxSize="22px" color="white" />
+      </Flex>
+      <Box flex="1" minW={0}>
+        <HStack spacing={2} mb={0.5}>
+          <Text fontWeight={700}>{method.name}</Text>
+          {method.preferred && (
+            <Badge colorScheme="green" variant="subtle">
+              Preferred
+            </Badge>
+          )}
+        </HStack>
+        <Text
+          fontSize="sm"
+          color={subtle}
+          fontFamily={method.name === "MetaMask" ? "mono" : undefined}
+          isTruncated
+        >
+          {method.href ? (
+            <Link href={method.href} isExternal color="teal.300">
+              {method.value}
+            </Link>
+          ) : (
+            method.value
+          )}
+        </Text>
+      </Box>
+      <IconButton
+        aria-label={`Copy ${method.name}`}
+        size="sm"
+        variant="ghost"
+        icon={hasCopied ? <FiCheck /> : <FiCopy />}
+        onClick={onCopy}
+      />
+    </Flex>
+  );
+}
+
+function DonateModal({
+  isOpen,
+  onClose,
+}: {
+  isOpen: boolean;
+  onClose: () => void;
+}) {
+  const subtle = useColorModeValue("gray.600", "gray.400");
+  return (
+    <Modal isOpen={isOpen} onClose={onClose} size="lg" isCentered scrollBehavior="inside">
+      <ModalOverlay backdropFilter="blur(8px)" />
+      <ModalContent borderRadius="2xl">
+        <ModalHeader>
+          <HStack spacing={2}>
+            <Icon as={FiHeart} color="pink.400" />
+            <Text>Support Focus Dock</Text>
+          </HStack>
+        </ModalHeader>
+        <ModalCloseButton />
+        <ModalBody pb={6}>
+          <Text color={subtle} mb={4}>
+            Focus Dock is free. If it makes your Mac better, you can chip in
+            through any of these:
+          </Text>
+          <Stack spacing={3}>
+            {PAYMENT_METHODS.map((m) => (
+              <PaymentRow key={m.name} method={m} />
+            ))}
+          </Stack>
+        </ModalBody>
+      </ModalContent>
+    </Modal>
+  );
+}
+
 export default function App() {
+  const donate = useDisclosure();
   return (
     <Box>
-      <Nav />
+      <Nav onDonate={donate.onOpen} />
       <Hero />
       <Features />
       <Download />
-      <Footer />
+      <Footer onDonate={donate.onOpen} />
+      <DonateModal isOpen={donate.isOpen} onClose={donate.onClose} />
     </Box>
   );
 }
