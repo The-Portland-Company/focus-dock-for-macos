@@ -23,3 +23,8 @@ Package.resolved
 dockdebug.log
 /tmp/dockdebug.log
 .claude/
+
+# Build artifacts
+build/
+FocusDock.xcodeproj/
+dist/
