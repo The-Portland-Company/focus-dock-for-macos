@@ -34,6 +34,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var screenObserver: NSObjectProtocol?
     private var minimizedObserver: NSKeyValueObservation?
     private var minimizedSubscription: Any?
+    private var runningAppsSubscription: Any?
     private var snapWorkItem: DispatchWorkItem?
 
     // Auto-hide state. `shownFrame` is the laid-out frame as if the dock were
@@ -82,6 +83,9 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         minimizedSubscription = MinimizedMonitor.shared.$windows.sink { [weak self] _ in
             DispatchQueue.main.async { self?.applyLayout() }
         }
+        runningAppsSubscription = RunningAppsMonitor.shared.$apps.sink { [weak self] _ in
+            DispatchQueue.main.async { self?.applyLayout() }
+        }
         startAutoHideTimer()
     }
 
@@ -110,9 +114,10 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let offset = CGFloat(prefs.edgeOffset)
 
         let mins = MinimizedMonitor.shared.windows.count
-        // +1 for the divider when any minimized tiles are present.
-        let dividerCount = mins > 0 ? 1 : 0
-        let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0) + mins + dividerCount)
+        let runningCount = RunningAppsMonitor.shared.apps.count
+        // +1 for each divider that's present (one before running apps, one before minimized).
+        let dividerCount = (mins > 0 ? 1 : 0) + (runningCount > 0 ? 1 : 0)
+        let count = max(1, AppLibrary.shared.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0) + mins + runningCount + dividerCount)
         let iconSize = CGFloat(prefs.effectiveIconSize)
         let spacing = CGFloat(prefs.effectiveSpacing)
         let isVerticalEdge = (edge == .left || edge == .right)
@@ -323,14 +328,18 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
 /// separating the right-side protected zone from the regular apps.
 enum DockSlot: Identifiable {
     case item(DockItem)
+    case runningApp(RunningAppEntry)
     case minimized(MinimizedWindow)
     case divider
+    case runningDivider
 
     var id: AnyHashable {
         switch self {
         case .item(let i): return AnyHashable(i.id)
+        case .runningApp(let r): return AnyHashable(r.id)
         case .minimized(let w): return AnyHashable(w.id)
         case .divider: return AnyHashable("divider")
+        case .runningDivider: return AnyHashable("running-divider")
         }
     }
 
@@ -348,6 +357,7 @@ struct DockView: View {
     @EnvironmentObject var prefs: Preferences
     @StateObject private var dragState = DragState()
     @StateObject private var minimized = MinimizedMonitor.shared
+    @StateObject private var runningApps = RunningAppsMonitor.shared
     @State private var hoverPoint: CGPoint? = nil
 
     private var iconSize: CGFloat { CGFloat(prefs.effectiveIconSize) }
@@ -392,6 +402,11 @@ struct DockView: View {
         var result: [DockSlot] = []
         if prefs.showFinder { result.append(.item(.app(Self.finderEntry))) }
         result.append(contentsOf: library.items.map { DockSlot.item($0) })
+        let running = runningApps.apps
+        if !running.isEmpty {
+            result.append(.runningDivider)
+            result.append(contentsOf: running.map { DockSlot.runningApp($0) })
+        }
         let mins = minimized.windows
         if !mins.isEmpty {
             result.append(.divider)
@@ -604,9 +619,11 @@ struct DockView: View {
                     spacing: spacing,
                     dragState: dragState
                 )
+            case .runningApp(let entry):
+                RunningAppTileView(entry: entry, iconSize: iconSize)
             case .minimized(let window):
                 MinimizedTileView(window: window, iconSize: iconSize, isVertical: isVertical)
-            case .divider:
+            case .divider, .runningDivider:
                 DockDivider(isVertical: isVertical, iconSize: iconSize)
             }
         }
@@ -665,6 +682,32 @@ struct MinimizedTileView: View {
         .contentShape(Rectangle())
         .onTapGesture { MinimizedMonitor.shared.unminimize(window) }
         .help(window.title.isEmpty ? window.appName : window.title)
+    }
+}
+
+/// Renders a running-but-not-pinned app as a regular icon with a running-
+/// indicator dot. Tap brings the app forward (or relaunches if it terminated).
+struct RunningAppTileView: View {
+    let entry: RunningAppEntry
+    let iconSize: CGFloat
+    @EnvironmentObject var prefs: Preferences
+
+    var body: some View {
+        VStack(spacing: 4) {
+            Image(nsImage: entry.icon)
+                .resizable()
+                .interpolation(.high)
+                .frame(width: iconSize, height: iconSize)
+            if prefs.showRunningIndicators {
+                Circle()
+                    .fill(Color.primary.opacity(0.6))
+                    .frame(width: 4, height: 4)
+            }
+        }
+        .frame(width: iconSize, height: iconSize)
+        .contentShape(Rectangle())
+        .onTapGesture { RunningAppsMonitor.shared.activate(entry) }
+        .help(entry.name)
     }
 }
 
