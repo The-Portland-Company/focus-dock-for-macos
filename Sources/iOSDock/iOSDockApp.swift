@@ -180,7 +180,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             let mi = NSMenuItem(title: p.name, action: #selector(selectProfile(_:)), keyEquivalent: "")
             mi.target = self
             mi.representedObject = p.id.uuidString
-            mi.state = (p.id == mgr.activeID) ? .on : .off
+            mi.state = (p.id == mgr.activeProfileID) ? .on : .off
             sub.addItem(mi)
         }
         sub.addItem(.separator())
@@ -207,7 +207,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func selectProfile(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String, let uuid = UUID(uuidString: s) else { return }
-        ProfileManager.shared.setActive(uuid)
+        ProfileManager.shared.setActiveProfile(uuid)
     }
 
     @objc func newProfile() {
@@ -216,13 +216,13 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func duplicateProfile() {
-        let current = ProfileManager.shared.active
+        let current = ProfileManager.shared.activeProfile
         guard let name = promptForString(title: "Duplicate Profile", message: "Name for the copy of \(current.name):", defaultValue: current.name + " Copy") else { return }
         ProfileManager.shared.addProfile(name: name, duplicateFrom: current.id)
     }
 
     @objc func renameProfile() {
-        let current = ProfileManager.shared.active
+        let current = ProfileManager.shared.activeProfile
         guard let name = promptForString(title: "Rename Profile", message: "New name:", defaultValue: current.name) else { return }
         ProfileManager.shared.renameProfile(current.id, to: name)
     }
@@ -230,7 +230,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     @objc func deleteProfile() {
         let mgr = ProfileManager.shared
         guard mgr.profiles.count > 1 else { return }
-        let current = mgr.active
+        let current = mgr.activeProfile
         let alert = NSAlert()
         alert.messageText = "Delete profile \"\(current.name)\"?"
         alert.informativeText = "This removes its pinned apps and dock settings. This cannot be undone."
@@ -294,26 +294,35 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         for dock in dockWindows { dock.close() }
         dockWindows.removeAll()
 
-        let assignment = ProfileManager.shared.active.screen
-        let screens = targetScreens(for: assignment)
-        guard !screens.isEmpty else {
-            // Pinned screen disconnected — fall back to main so the user
-            // doesn't end up with zero docks.
+        let mgr = ProfileManager.shared
+        let activeDocks = mgr.activeDocks
+        guard !activeDocks.isEmpty else {
+            // No docks at all — bootstrap one on the main screen.
             if let main = NSScreen.main {
-                let dock = DockWindowController(targetScreen: main)
-                dock.showWindow(nil)
-                dockWindows.append(dock)
+                let fallbackID = mgr.docks.first?.id ?? UUID()
+                let ctrl = DockWindowController(dockID: fallbackID, targetScreen: main)
+                ctrl.showWindow(nil)
+                dockWindows.append(ctrl)
             }
             return
         }
-        for screen in screens {
-            // `.allScreens` and `.main` both want a non-pinned window when there's
-            // only one screen — pass nil so future screen changes are handled
-            // naturally by the existing window-screen-changed code path.
-            let pin: NSScreen? = (assignment == .allScreens || assignment == .main) ? screen : screen
-            let dock = DockWindowController(targetScreen: pin)
-            dock.showWindow(nil)
-            dockWindows.append(dock)
+        for dock in activeDocks {
+            let screens = targetScreens(for: dock.screen)
+            if screens.isEmpty {
+                // Pinned screen disconnected — fall back to main so the user
+                // doesn't end up with this dock invisible.
+                if let main = NSScreen.main {
+                    let ctrl = DockWindowController(dockID: dock.id, targetScreen: main)
+                    ctrl.showWindow(nil)
+                    dockWindows.append(ctrl)
+                }
+                continue
+            }
+            for screen in screens {
+                let ctrl = DockWindowController(dockID: dock.id, targetScreen: screen)
+                ctrl.showWindow(nil)
+                dockWindows.append(ctrl)
+            }
         }
     }
 

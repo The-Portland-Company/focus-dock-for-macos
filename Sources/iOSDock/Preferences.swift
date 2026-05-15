@@ -5,6 +5,12 @@ final class Preferences: ObservableObject {
     static let shared = Preferences()
     static let changed = Notification.Name("FocusDock.PreferencesChanged")
 
+    /// When non-nil, this instance is pinned to one DockInstance (used by each
+    /// `DockWindowController` to read/write its own dock's settings). When nil
+    /// (the singleton case), reads/writes track `ProfileManager.editingDockID`
+    /// so the Settings UI always edits the currently-selected dock.
+    let dockID: UUID?
+
     private let defaults = UserDefaults.standard
     private let kDockIcon = "showDockIcon"
     private let kMenuBar = "showMenuBarIcon"
@@ -40,13 +46,19 @@ final class Preferences: ObservableObject {
     /// Resolve a UserDefaults key for the active profile (or leave global keys
     /// untouched). Per-profile keys are listed in `ProfileKeys.perProfile`.
     private func pk(_ key: String) -> String {
-        ProfileKeys.isPerProfile(key) ? ProfileManager.shared.nsKey(key) : key
+        guard ProfileKeys.isPerProfile(key) else { return key }
+        let id = dockID ?? ProfileManager.shared.editingDockID
+        return ProfileManager.shared.nsKey(key, for: id)
     }
 
-    init() {
-        // Make sure ProfileManager has bootstrapped (creates a default profile
-        // and migrates legacy non-namespaced values) before we seed defaults.
+    convenience init(dockID: UUID) { self.init(boundDockID: dockID) }
+
+    private convenience init() { self.init(boundDockID: nil) }
+
+    private init(boundDockID: UUID?) {
+        // Make sure ProfileManager has bootstrapped before we seed defaults.
         _ = ProfileManager.shared
+        self.dockID = boundDockID
 
         if defaults.object(forKey: kDockIcon) == nil { defaults.set(true, forKey: kDockIcon) }
         if defaults.object(forKey: kMenuBar) == nil { defaults.set(true, forKey: kMenuBar) }
@@ -80,14 +92,16 @@ final class Preferences: ObservableObject {
         // Reset transient edit-layout flag every launch (always global).
         defaults.set(false, forKey: kEditing)
 
-        // When the active profile changes, push @Published so SwiftUI observers
-        // bound to Preferences re-read all values.
-        NotificationCenter.default.addObserver(
-            self, selector: #selector(handleActiveProfileChanged),
-            name: ProfileManager.activeChanged, object: nil)
+        // Singleton case: when the editing target changes, push @Published so
+        // SwiftUI observers bound to Preferences re-read all values.
+        if boundDockID == nil {
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(handleEditingDockChanged),
+                name: ProfileManager.editingDockChanged, object: nil)
+        }
     }
 
-    @objc private func handleActiveProfileChanged() {
+    @objc private func handleEditingDockChanged() {
         _tick &+= 1
         NotificationCenter.default.post(name: Self.changed, object: nil)
     }

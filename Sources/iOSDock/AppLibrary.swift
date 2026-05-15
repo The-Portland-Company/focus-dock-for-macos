@@ -89,52 +89,76 @@ struct AppBadgeState: Equatable {
 }
 
 final class AppLibrary: ObservableObject {
+    /// Posted whenever any AppLibrary instance saves to disk. `object` is the
+    /// dockID (`UUID`) whose library was written. Other instances bound to the
+    /// same dockID reload from disk in response.
+    static let libraryChanged = Notification.Name("FocusDock.LibraryChanged")
+
+    /// The singleton edits the **currently-selected dock** (the one shown in
+    /// Settings → General/Apps). Per-dock instances are owned by each
+    /// `DockWindowController`.
     static let shared = AppLibrary()
+
+    /// When non-nil, this instance is pinned to a specific dock's items file.
+    /// Nil tracks `ProfileManager.editingDockID` dynamically.
+    let dockID: UUID?
 
     @Published var items: [DockItem] = [] {
         didSet { save() }
     }
 
-    /// Runtime badge state keyed by lowercased app name. Populated by
-    /// `BadgeMonitor` on the main thread. Not persisted.
     @Published var badgeStates: [String: AppBadgeState] = [:]
-
-    /// Set by `TrashWatcher` (which polls Finder via AppleScript, because
-    /// `~/.Trash` is TCC-protected and direct filesystem reads return EPERM).
-    /// `nil` means we haven't been able to determine state yet — treat as empty
-    /// for icon purposes.
     @Published var trashIsEmpty: Bool = true
 
     func badgeState(for appName: String) -> AppBadgeState? {
         badgeStates[appName.lowercased()]
     }
 
+    private var activeDockID: UUID { dockID ?? ProfileManager.shared.editingDockID }
+
     private var storageURL: URL {
-        ProfileManager.shared.libraryURL(for: ProfileManager.shared.activeID)
+        ProfileManager.shared.libraryURL(for: activeDockID)
     }
 
     private var suppressSave: Bool = false
 
-    init() {
-        // Ensure ProfileManager has run its bootstrap + legacy migration first
-        // so storageURL points at the active profile's library.json.
+    convenience init(dockID: UUID) { self.init(boundDockID: dockID) }
+
+    private convenience init() { self.init(boundDockID: nil) }
+
+    private init(boundDockID: UUID?) {
         _ = ProfileManager.shared
+        self.dockID = boundDockID
         load()
         if items.isEmpty { seedDefaults() }
 
+        if boundDockID == nil {
+            // Singleton: swap source when the editing target changes.
+            NotificationCenter.default.addObserver(
+                self, selector: #selector(handleEditingDockChanged),
+                name: ProfileManager.editingDockChanged, object: nil)
+        }
+        // Reload when any sibling instance writes to the same dock's file.
         NotificationCenter.default.addObserver(
-            self, selector: #selector(handleActiveProfileChanged),
-            name: ProfileManager.activeChanged, object: nil)
+            self, selector: #selector(handleLibraryChanged(_:)),
+            name: AppLibrary.libraryChanged, object: nil)
     }
 
-    @objc private func handleActiveProfileChanged() {
-        // Load the new profile's items without triggering save() (didSet) which
-        // would write the new profile's data into… the new profile's file. That's
-        // actually fine, but we avoid pointless I/O.
+    @objc private func handleEditingDockChanged() {
         suppressSave = true
         items = []
         load()
         if items.isEmpty { seedDefaults() }
+        suppressSave = false
+    }
+
+    @objc private func handleLibraryChanged(_ note: Notification) {
+        guard let writtenID = note.object as? UUID else { return }
+        guard writtenID == activeDockID else { return }
+        // Don't bounce our own write back at us.
+        if note.userInfo?["source"] as? ObjectIdentifier == ObjectIdentifier(self) { return }
+        suppressSave = true
+        load()
         suppressSave = false
     }
 
@@ -147,6 +171,7 @@ final class AppLibrary: ObservableObject {
 
     private func save() {
         if suppressSave { return }
+        let writtenDockID = activeDockID
         let persisted: [PersistedItem] = items.map { item in
             switch item {
             case .app(let a): return PersistedItem(kind: "app", app: a, folder: nil)
@@ -156,6 +181,11 @@ final class AppLibrary: ObservableObject {
         if let data = try? JSONEncoder().encode(persisted) {
             try? data.write(to: storageURL)
         }
+        NotificationCenter.default.post(
+            name: AppLibrary.libraryChanged,
+            object: writtenDockID,
+            userInfo: ["source": ObjectIdentifier(self)]
+        )
     }
 
     private func load() {

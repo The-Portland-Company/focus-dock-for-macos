@@ -3,166 +3,237 @@ import AppKit
 
 struct ProfilesTab: View {
     @ObservedObject private var mgr = ProfileManager.shared
-    @State private var selection: UUID? = nil
-    @State private var editingID: UUID? = nil
-    @State private var editingName: String = ""
 
     var body: some View {
         VStack(alignment: .leading, spacing: 12) {
-            Text("Profiles")
-                .font(.title3).bold()
-            Text("Each profile has its own pinned apps and dock-visual settings (edge, size, padding, colors). Switch between them from the menu bar.")
-                .foregroundStyle(.secondary)
-                .font(.callout)
-                .fixedSize(horizontal: false, vertical: true)
+            header
+            profilesList
+            profileButtonRow
+            Divider()
+            presetsSection
+            Spacer()
+        }
+        .padding()
+    }
 
-            List(selection: $selection) {
+    private var header: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Profiles").font(.title3).bold()
+            Text("A profile is a named group of docks. Each dock has its own pinned apps, screen, and visual settings. Switch profiles from the menu bar — every dock in the active profile appears at once.")
+                .foregroundStyle(.secondary).font(.callout)
+                .fixedSize(horizontal: false, vertical: true)
+        }
+    }
+
+    @ViewBuilder
+    private var profilesList: some View {
+        ScrollView {
+            VStack(alignment: .leading, spacing: 8) {
                 ForEach(mgr.profiles) { p in
-                    VStack(alignment: .leading, spacing: 4) {
-                        HStack {
-                            Image(systemName: p.id == mgr.activeID ? "checkmark.circle.fill" : "circle")
-                                .foregroundStyle(p.id == mgr.activeID ? Color.accentColor : Color.secondary)
-                            if editingID == p.id {
-                                TextField("Name", text: $editingName, onCommit: {
-                                    mgr.renameProfile(p.id, to: editingName)
-                                    editingID = nil
-                                })
-                                .textFieldStyle(.roundedBorder)
-                            } else {
-                                Text(p.name)
-                                    .fontWeight(p.id == mgr.activeID ? .semibold : .regular)
-                                    .onTapGesture(count: 2) {
-                                        editingName = p.name
-                                        editingID = p.id
-                                    }
-                            }
-                            Spacer()
-                            if p.id != mgr.activeID {
-                                Button("Use") { mgr.setActive(p.id) }
-                                    .buttonStyle(.borderless)
-                                    .controlSize(.small)
-                            } else {
-                                Text("Active").foregroundStyle(.secondary).font(.caption)
-                            }
-                        }
-                        HStack(spacing: 6) {
-                            Image(systemName: "display").foregroundStyle(.secondary).font(.caption)
-                            ScreenPicker(profileID: p.id, current: p.screen)
-                                .controlSize(.small)
-                        }
-                        .padding(.leading, 22)
-                    }
-                    .tag(p.id)
-                    .padding(.vertical, 2)
+                    ProfileRow(profile: p)
                 }
             }
-            .frame(minHeight: 240)
+        }
+        .frame(minHeight: 280)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+    }
 
-            HStack {
-                Button {
-                    let name = promptName(title: "New Profile", defaultValue: "New Profile")
-                    if let n = name {
-                        let id = mgr.addProfile(name: n)
-                        selection = id
-                    }
-                } label: { Label("New", systemImage: "plus") }
+    private var profileButtonRow: some View {
+        HStack {
+            Button {
+                if let n = Prompt.string(title: "New Profile", defaultValue: "New Profile") {
+                    _ = mgr.addProfile(name: n)
+                }
+            } label: { Label("New profile", systemImage: "plus") }
+            Button {
+                let src = mgr.activeProfile
+                if let n = Prompt.string(title: "Duplicate Profile", defaultValue: src.name + " Copy") {
+                    _ = mgr.addProfile(name: n, duplicateFrom: src.id)
+                }
+            } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+            Spacer()
+        }
+    }
 
-                Button {
-                    let src = selection ?? mgr.activeID
-                    let srcName = mgr.profiles.first(where: { $0.id == src })?.name ?? "Profile"
-                    if let n = promptName(title: "Duplicate Profile", defaultValue: srcName + " Copy") {
-                        let id = mgr.addProfile(name: n, duplicateFrom: src)
-                        selection = id
-                    }
-                } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
-
-                Button(role: .destructive) {
-                    let id = selection ?? mgr.activeID
-                    guard mgr.profiles.count > 1 else { return }
-                    guard let p = mgr.profiles.first(where: { $0.id == id }) else { return }
-                    let alert = NSAlert()
-                    alert.messageText = "Delete profile \"\(p.name)\"?"
-                    alert.informativeText = "This removes its pinned apps and dock settings. This cannot be undone."
-                    alert.alertStyle = .warning
-                    alert.addButton(withTitle: "Delete")
-                    alert.addButton(withTitle: "Cancel")
-                    if alert.runModal() == .alertFirstButtonReturn {
-                        mgr.deleteProfile(id)
-                    }
-                } label: { Label("Delete", systemImage: "trash") }
-                .disabled(mgr.profiles.count <= 1)
-
-                Spacer()
-            }
-
-            Divider().padding(.vertical, 4)
-
-            Text("Suggested starting profiles")
-                .font(.headline)
-            Text("Quick-create one of these — it duplicates your current active profile as a starting point.")
+    private var presetsSection: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            Text("Suggested profiles").font(.headline)
+            Text("Quick-create one of these — it duplicates your active profile as a starting point.")
                 .foregroundStyle(.secondary).font(.callout)
             HStack {
                 ForEach(["Productivity", "Coding", "Design", "Video", "Gaming"], id: \.self) { preset in
                     Button(preset) {
-                        let id = mgr.addProfile(name: preset, duplicateFrom: mgr.activeID)
-                        selection = id
+                        _ = mgr.addProfile(name: preset, duplicateFrom: mgr.activeProfileID)
                     }
                     .buttonStyle(.bordered)
                     .controlSize(.small)
                     .disabled(mgr.profiles.contains(where: { $0.name == preset }))
                 }
             }
-
-            Spacer()
         }
-        .padding()
     }
+}
 
-    private struct ScreenPicker: View {
-        let profileID: UUID
-        let current: ScreenAssignment
-        @State private var screens: [NSScreen] = NSScreen.screens
+// MARK: - Profile row
 
-        var body: some View {
-            Menu {
-                Button {
-                    ProfileManager.shared.setScreen(profileID, .allScreens)
-                } label: {
-                    Label("All screens", systemImage: current == .allScreens ? "checkmark" : "")
+private struct ProfileRow: View {
+    let profile: Profile
+    @ObservedObject private var mgr = ProfileManager.shared
+    @State private var renaming: Bool = false
+    @State private var rename: String = ""
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 6) {
+            HStack {
+                Image(systemName: profile.id == mgr.activeProfileID ? "checkmark.circle.fill" : "circle")
+                    .foregroundStyle(profile.id == mgr.activeProfileID ? Color.accentColor : Color.secondary)
+                if renaming {
+                    TextField("Name", text: $rename, onCommit: {
+                        mgr.renameProfile(profile.id, to: rename); renaming = false
+                    })
+                    .textFieldStyle(.roundedBorder)
+                    .frame(maxWidth: 200)
+                } else {
+                    Text(profile.name)
+                        .fontWeight(profile.id == mgr.activeProfileID ? .semibold : .regular)
+                        .onTapGesture(count: 2) { rename = profile.name; renaming = true }
                 }
-                Button {
-                    ProfileManager.shared.setScreen(profileID, .main)
-                } label: {
-                    Label("Main screen only", systemImage: current == .main ? "checkmark" : "")
+                Spacer()
+                if profile.id != mgr.activeProfileID {
+                    Button("Use") { mgr.setActiveProfile(profile.id) }
+                        .buttonStyle(.borderless).controlSize(.small)
+                } else {
+                    Text("Active").foregroundStyle(.secondary).font(.caption)
                 }
-                if screens.count > 1 {
+                Menu {
+                    Button("Rename…") { rename = profile.name; renaming = true }
+                    Button("Add Dock…") {
+                        if let n = Prompt.string(title: "Add Dock", defaultValue: "New Dock") {
+                            _ = mgr.addDock(name: n, in: profile.id)
+                        }
+                    }
                     Divider()
-                    ForEach(screens, id: \.self) { s in
-                        if let uuid = ScreenIdentity.uuid(for: s) {
-                            Button {
-                                ProfileManager.shared.setScreen(profileID, .specific(uuid: uuid, name: ScreenIdentity.displayName(for: s)))
-                            } label: {
-                                let isSel: Bool = {
-                                    if case .specific(let u, _) = current { return u == uuid }
-                                    return false
-                                }()
-                                Label(ScreenIdentity.displayName(for: s), systemImage: isSel ? "checkmark" : "")
-                            }
+                    Button("Delete Profile…", role: .destructive) {
+                        guard mgr.profiles.count > 1 else { return }
+                        let alert = NSAlert()
+                        alert.messageText = "Delete profile \"\(profile.name)\"?"
+                        alert.informativeText = "This removes every dock in the profile."
+                        alert.alertStyle = .warning
+                        alert.addButton(withTitle: "Delete")
+                        alert.addButton(withTitle: "Cancel")
+                        if alert.runModal() == .alertFirstButtonReturn {
+                            mgr.deleteProfile(profile.id)
+                        }
+                    }
+                } label: { Image(systemName: "ellipsis.circle") }
+                .menuStyle(.borderlessButton)
+                .fixedSize()
+            }
+            ForEach(profile.dockIDs, id: \.self) { dockID in
+                if let dock = mgr.dock(id: dockID) {
+                    DockRow(dock: dock, parentProfile: profile)
+                        .padding(.leading, 22)
+                }
+            }
+        }
+        .padding(8)
+        .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.03)))
+    }
+}
+
+// MARK: - Dock row
+
+private struct DockRow: View {
+    let dock: DockInstance
+    let parentProfile: Profile
+    @ObservedObject private var mgr = ProfileManager.shared
+    @State private var renaming: Bool = false
+    @State private var rename: String = ""
+
+    var body: some View {
+        HStack(spacing: 6) {
+            Image(systemName: dock.id == mgr.editingDockID ? "pencil.circle.fill" : "rectangle.dock")
+                .foregroundStyle(dock.id == mgr.editingDockID ? Color.accentColor : Color.secondary)
+                .font(.caption)
+            if renaming {
+                TextField("Name", text: $rename, onCommit: {
+                    mgr.renameDock(dock.id, to: rename); renaming = false
+                })
+                .textFieldStyle(.roundedBorder)
+                .frame(maxWidth: 160)
+            } else {
+                Text(dock.name).font(.callout)
+                    .onTapGesture(count: 2) { rename = dock.name; renaming = true }
+            }
+            Image(systemName: "display").foregroundStyle(.secondary).font(.caption)
+            ScreenPicker(dockID: dock.id, current: dock.screen)
+            Spacer()
+            if dock.id != mgr.editingDockID {
+                Button("Edit") { mgr.setEditingDock(dock.id) }
+                    .buttonStyle(.borderless).controlSize(.small)
+                    .help("Make this dock the target of the General/Apps tabs")
+            } else {
+                Text("Editing").foregroundStyle(.secondary).font(.caption)
+            }
+            Menu {
+                Button("Rename…") { rename = dock.name; renaming = true }
+                Button("Remove from Profile", role: .destructive) {
+                    mgr.removeDock(dock.id)
+                }
+                .disabled(parentProfile.dockIDs.count <= 1 && parentProfile.id == mgr.activeProfileID)
+            } label: { Image(systemName: "ellipsis.circle").font(.caption) }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+        }
+    }
+}
+
+// MARK: - Screen picker
+
+private struct ScreenPicker: View {
+    let dockID: UUID
+    let current: ScreenAssignment
+    @State private var screens: [NSScreen] = NSScreen.screens
+
+    var body: some View {
+        Menu {
+            Button { ProfileManager.shared.setDockScreen(dockID, .allScreens) } label: {
+                Label("All screens", systemImage: current == .allScreens ? "checkmark" : "")
+            }
+            Button { ProfileManager.shared.setDockScreen(dockID, .main) } label: {
+                Label("Main screen only", systemImage: current == .main ? "checkmark" : "")
+            }
+            if screens.count > 1 {
+                Divider()
+                ForEach(screens, id: \.self) { s in
+                    if let uuid = ScreenIdentity.uuid(for: s) {
+                        Button {
+                            ProfileManager.shared.setDockScreen(dockID, .specific(uuid: uuid, name: ScreenIdentity.displayName(for: s)))
+                        } label: {
+                            let isSel: Bool = {
+                                if case .specific(let u, _) = current { return u == uuid }
+                                return false
+                            }()
+                            Label(ScreenIdentity.displayName(for: s), systemImage: isSel ? "checkmark" : "")
                         }
                     }
                 }
-            } label: {
-                Text(current.label).font(.caption)
             }
-            .menuStyle(.borderlessButton)
-            .fixedSize()
-            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
-                screens = NSScreen.screens
-            }
+        } label: {
+            Text(current.label).font(.caption)
+        }
+        .menuStyle(.borderlessButton)
+        .fixedSize()
+        .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+            screens = NSScreen.screens
         }
     }
+}
 
-    private func promptName(title: String, defaultValue: String) -> String? {
+// MARK: - Helpers
+
+enum Prompt {
+    static func string(title: String, defaultValue: String) -> String? {
         let alert = NSAlert()
         alert.messageText = title
         alert.addButton(withTitle: "OK")
