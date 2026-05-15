@@ -57,6 +57,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // section of the dock (mirrors native macOS Dock).
         MinimizedMonitor.shared.start()
 
+        // Surface running-but-not-pinned apps in the dock so it has parity
+        // with the native macOS Dock (which always shows every running app).
+        RunningAppsMonitor.shared.start()
+
         // Watch ~/.Trash so the dock's Trash icon swaps between empty/full
         // bitmaps as items move in or out.
         TrashWatcher.shared.start()
