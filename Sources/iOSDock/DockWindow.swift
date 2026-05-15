@@ -43,6 +43,10 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var isAutoHidden: Bool = false
     private var autoHideTimer: Timer?
     private var hideWorkItem: DispatchWorkItem?
+    /// Wall-clock time until which auto-hide is suppressed. Used by manual
+    /// reveals ("Show Dock" menu item) so the dock stays visible long enough
+    /// for the user to mouse over it before it parks itself again.
+    private var suppressHideUntil: Date = .distantPast
 
     convenience init() {
         let content = DockView()
@@ -217,15 +221,31 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
                 reveal()
             }
         } else {
-            // Keep visible if the cursor is over the dock or in its reveal zone.
+            // Keep visible if the cursor is over the dock or in its reveal zone,
+            // or if a manual reveal is suppressing hide.
             let active = shownFrame.insetBy(dx: -2, dy: -2)
-            if !active.contains(mouse) {
-                scheduleHide()
-            } else {
+            if Date() < suppressHideUntil || active.contains(mouse) {
                 hideWorkItem?.cancel()
                 hideWorkItem = nil
+            } else {
+                scheduleHide()
             }
         }
+    }
+
+    /// Force the dock visible immediately and keep it visible for a short
+    /// grace period so the user can mouse onto it. Invoked by the "Show Dock"
+    /// menu item.
+    func forceReveal() {
+        suppressHideUntil = Date().addingTimeInterval(3.0)
+        hideWorkItem?.cancel()
+        hideWorkItem = nil
+        if isAutoHidden {
+            reveal()
+        } else if let win = window {
+            win.setFrame(shownFrame, display: true, animate: false)
+        }
+        window?.orderFrontRegardless()
     }
 
     private func scheduleHide() {

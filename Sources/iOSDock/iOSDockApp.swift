@@ -165,7 +165,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     @objc func showDock() {
         dockWindow?.showWindow(nil)
-        dockWindow?.window?.orderFrontRegardless()
+        dockWindow?.forceReveal()
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {
