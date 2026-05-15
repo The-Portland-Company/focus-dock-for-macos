@@ -48,7 +48,20 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     /// for the user to mouse over it before it parks itself again.
     private var suppressHideUntil: Date = .distantPast
 
-    convenience init() {
+    /// When non-nil, this dock window is pinned to a specific screen. All
+    /// layout calculations (frame, hidden frame, reveal zone) use this screen
+    /// instead of falling back to `NSScreen.main`. Setting this also moves the
+    /// window onto the target screen at init.
+    var targetScreen: NSScreen?
+
+    /// Screen the dock currently lays out against. Pinned screen if available,
+    /// otherwise fall back to `NSScreen.main` (e.g. if a pinned screen got
+    /// disconnected).
+    private var activeScreen: NSScreen? {
+        targetScreen ?? NSScreen.main ?? window?.screen
+    }
+
+    convenience init(targetScreen: NSScreen? = nil) {
         let content = DockView()
             .environmentObject(AppLibrary.shared)
             .environmentObject(Preferences.shared)
@@ -68,6 +81,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         win.contentViewController = host
 
         self.init(window: win)
+        self.targetScreen = targetScreen
         win.delegate = self
         DockTooltipPanel.dockWindow = win
         applyLayout()
@@ -101,7 +115,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
 
     /// Compute the proper window size and origin for the configured edge.
     func applyLayout() {
-        guard let win = window, let screen = (NSScreen.main ?? win.screen) else { return }
+        guard let win = window, let screen = activeScreen else { return }
         let edge = Preferences.shared.edge
         let isEditing = Preferences.shared.isEditingLayout
         win.isMovableByWindowBackground = isEditing
@@ -213,7 +227,8 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
             if isAutoHidden { reveal() }
             return
         }
-        guard let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        guard let win = window, let screen = activeScreen else { return }
+        _ = win
         let mouse = NSEvent.mouseLocation
         let edge = prefs.edge
         if isAutoHidden {
@@ -265,7 +280,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     }
 
     private func hide() {
-        guard !isAutoHidden, let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        guard !isAutoHidden, let win = window, let screen = activeScreen else { return }
         isAutoHidden = true
         DockTooltipPanel.shared.hideAll()
         let target = hiddenFrame(from: shownFrame, edge: Preferences.shared.edge, on: screen)
@@ -314,7 +329,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
 
     // Live snap-to-nearest-edge while dragging in edit mode.
     func windowDidMove(_ notification: Notification) {
-        guard Preferences.shared.isEditingLayout, let win = window, let screen = win.screen ?? NSScreen.main else { return }
+        guard Preferences.shared.isEditingLayout, let win = window, let screen = activeScreen else { return }
         snapWorkItem?.cancel()
         let work = DispatchWorkItem { [weak self] in
             guard let self = self else { return }

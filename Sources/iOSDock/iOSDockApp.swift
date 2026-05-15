@@ -17,7 +17,12 @@ struct FocusDockApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
-    var dockWindow: DockWindowController?
+    /// Primary dock window (also tracked in `dockWindows[0]`). Kept as a
+    /// backwards-compatible alias for code paths that need "any" dock — e.g.
+    /// the menu-bar "Show Dock" command.
+    var dockWindow: DockWindowController? { dockWindows.first }
+    var dockWindows: [DockWindowController] = []
+    private var screenObserver: NSObjectProtocol?
     var statusItem: NSStatusItem?
     private var prefsObserver: NSObjectProtocol?
     private var profilesObserver: NSObjectProtocol?
@@ -30,9 +35,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             forName: NSWindow.didUpdateNotification, object: nil, queue: .main
         ) { _ in Self.makeSettingsWindowResizable() }
 
-        // Show dock window
-        dockWindow = DockWindowController()
-        dockWindow?.showWindow(nil)
+        // Show dock window(s) for the active profile's screen assignment.
+        rebuildDockWindows()
+        // Rebuild when the user switches profile (changes screen assignment) or
+        // when displays are added/removed/reconfigured.
+        NotificationCenter.default.addObserver(
+            forName: ProfileManager.activeChanged, object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuildDockWindows() }
+        NotificationCenter.default.addObserver(
+            forName: ProfileManager.listChanged, object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuildDockWindows() }
+        screenObserver = NotificationCenter.default.addObserver(
+            forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
+        ) { [weak self] _ in self?.rebuildDockWindows() }
 
         applyPresentationMode()
         installStatusItemIfNeeded()
@@ -264,8 +279,52 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     }
 
     @objc func showDock() {
-        dockWindow?.showWindow(nil)
-        dockWindow?.forceReveal()
+        for dock in dockWindows {
+            dock.showWindow(nil)
+            dock.forceReveal()
+        }
+    }
+
+    /// Tear down and recreate the dock windows based on the active profile's
+    /// `ScreenAssignment` and the currently-connected `NSScreen.screens`. Called
+    /// at launch, on profile switch / list change, and when displays are
+    /// reconfigured.
+    func rebuildDockWindows() {
+        // Close existing.
+        for dock in dockWindows { dock.close() }
+        dockWindows.removeAll()
+
+        let assignment = ProfileManager.shared.active.screen
+        let screens = targetScreens(for: assignment)
+        guard !screens.isEmpty else {
+            // Pinned screen disconnected — fall back to main so the user
+            // doesn't end up with zero docks.
+            if let main = NSScreen.main {
+                let dock = DockWindowController(targetScreen: main)
+                dock.showWindow(nil)
+                dockWindows.append(dock)
+            }
+            return
+        }
+        for screen in screens {
+            // `.allScreens` and `.main` both want a non-pinned window when there's
+            // only one screen — pass nil so future screen changes are handled
+            // naturally by the existing window-screen-changed code path.
+            let pin: NSScreen? = (assignment == .allScreens || assignment == .main) ? screen : screen
+            let dock = DockWindowController(targetScreen: pin)
+            dock.showWindow(nil)
+            dockWindows.append(dock)
+        }
+    }
+
+    private func targetScreens(for assignment: ScreenAssignment) -> [NSScreen] {
+        switch assignment {
+        case .allScreens: return NSScreen.screens
+        case .main: return NSScreen.main.map { [$0] } ?? []
+        case .specific(let uuid, _):
+            if let s = ScreenIdentity.screen(forUUID: uuid) { return [s] }
+            return []
+        }
     }
 
     func applicationShouldTerminate(_ sender: NSApplication) -> NSApplication.TerminateReply {

@@ -18,36 +18,45 @@ struct ProfilesTab: View {
 
             List(selection: $selection) {
                 ForEach(mgr.profiles) { p in
-                    HStack {
-                        Image(systemName: p.id == mgr.activeID ? "checkmark.circle.fill" : "circle")
-                            .foregroundStyle(p.id == mgr.activeID ? Color.accentColor : Color.secondary)
-                        if editingID == p.id {
-                            TextField("Name", text: $editingName, onCommit: {
-                                mgr.renameProfile(p.id, to: editingName)
-                                editingID = nil
-                            })
-                            .textFieldStyle(.roundedBorder)
-                        } else {
-                            Text(p.name)
-                                .fontWeight(p.id == mgr.activeID ? .semibold : .regular)
-                                .onTapGesture(count: 2) {
-                                    editingName = p.name
-                                    editingID = p.id
-                                }
+                    VStack(alignment: .leading, spacing: 4) {
+                        HStack {
+                            Image(systemName: p.id == mgr.activeID ? "checkmark.circle.fill" : "circle")
+                                .foregroundStyle(p.id == mgr.activeID ? Color.accentColor : Color.secondary)
+                            if editingID == p.id {
+                                TextField("Name", text: $editingName, onCommit: {
+                                    mgr.renameProfile(p.id, to: editingName)
+                                    editingID = nil
+                                })
+                                .textFieldStyle(.roundedBorder)
+                            } else {
+                                Text(p.name)
+                                    .fontWeight(p.id == mgr.activeID ? .semibold : .regular)
+                                    .onTapGesture(count: 2) {
+                                        editingName = p.name
+                                        editingID = p.id
+                                    }
+                            }
+                            Spacer()
+                            if p.id != mgr.activeID {
+                                Button("Use") { mgr.setActive(p.id) }
+                                    .buttonStyle(.borderless)
+                                    .controlSize(.small)
+                            } else {
+                                Text("Active").foregroundStyle(.secondary).font(.caption)
+                            }
                         }
-                        Spacer()
-                        if p.id != mgr.activeID {
-                            Button("Use") { mgr.setActive(p.id) }
-                                .buttonStyle(.borderless)
+                        HStack(spacing: 6) {
+                            Image(systemName: "display").foregroundStyle(.secondary).font(.caption)
+                            ScreenPicker(profileID: p.id, current: p.screen)
                                 .controlSize(.small)
-                        } else {
-                            Text("Active").foregroundStyle(.secondary).font(.caption)
                         }
+                        .padding(.leading, 22)
                     }
                     .tag(p.id)
+                    .padding(.vertical, 2)
                 }
             }
-            .frame(minHeight: 200)
+            .frame(minHeight: 240)
 
             HStack {
                 Button {
@@ -107,6 +116,50 @@ struct ProfilesTab: View {
             Spacer()
         }
         .padding()
+    }
+
+    private struct ScreenPicker: View {
+        let profileID: UUID
+        let current: ScreenAssignment
+        @State private var screens: [NSScreen] = NSScreen.screens
+
+        var body: some View {
+            Menu {
+                Button {
+                    ProfileManager.shared.setScreen(profileID, .allScreens)
+                } label: {
+                    Label("All screens", systemImage: current == .allScreens ? "checkmark" : "")
+                }
+                Button {
+                    ProfileManager.shared.setScreen(profileID, .main)
+                } label: {
+                    Label("Main screen only", systemImage: current == .main ? "checkmark" : "")
+                }
+                if screens.count > 1 {
+                    Divider()
+                    ForEach(screens, id: \.self) { s in
+                        if let uuid = ScreenIdentity.uuid(for: s) {
+                            Button {
+                                ProfileManager.shared.setScreen(profileID, .specific(uuid: uuid, name: ScreenIdentity.displayName(for: s)))
+                            } label: {
+                                let isSel: Bool = {
+                                    if case .specific(let u, _) = current { return u == uuid }
+                                    return false
+                                }()
+                                Label(ScreenIdentity.displayName(for: s), systemImage: isSel ? "checkmark" : "")
+                            }
+                        }
+                    }
+                }
+            } label: {
+                Text(current.label).font(.caption)
+            }
+            .menuStyle(.borderlessButton)
+            .fixedSize()
+            .onReceive(NotificationCenter.default.publisher(for: NSApplication.didChangeScreenParametersNotification)) { _ in
+                screens = NSScreen.screens
+            }
+        }
     }
 
     private func promptName(title: String, defaultValue: String) -> String? {

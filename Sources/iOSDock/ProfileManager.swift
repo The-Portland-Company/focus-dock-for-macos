@@ -4,9 +4,68 @@ import AppKit
 /// A named bundle of (pinned items + dock-visual preferences).
 /// Each profile gets its own library.json and a UserDefaults namespace
 /// `profile.<uuid>.<key>`. Switching the active profile reloads the dock.
+/// Where a profile's dock(s) appear. `.allScreens` clones one dock onto every
+/// connected display. `.main` shows it only on the current main screen.
+/// `.specific(uuid, name)` pins it to one screen by `CGDirectDisplayID`-derived
+/// stable UUID; `name` is the human-readable display name for the picker UI
+/// (may be stale if the screen is renamed or disconnected).
+enum ScreenAssignment: Codable, Equatable {
+    case allScreens
+    case main
+    case specific(uuid: String, name: String)
+
+    var label: String {
+        switch self {
+        case .allScreens: return "All screens"
+        case .main: return "Main screen only"
+        case .specific(_, let name): return name
+        }
+    }
+}
+
 struct ProfileMeta: Identifiable, Codable, Equatable {
     var id: UUID
     var name: String
+    var screen: ScreenAssignment = .allScreens
+
+    // Custom decoder: tolerate the absence of `screen` for pre-Phase-2 profiles.
+    enum CodingKeys: String, CodingKey { case id, name, screen }
+    init(id: UUID, name: String, screen: ScreenAssignment = .allScreens) {
+        self.id = id; self.name = name; self.screen = screen
+    }
+    init(from decoder: Decoder) throws {
+        let c = try decoder.container(keyedBy: CodingKeys.self)
+        self.id = try c.decode(UUID.self, forKey: .id)
+        self.name = try c.decode(String.self, forKey: .name)
+        self.screen = (try? c.decode(ScreenAssignment.self, forKey: .screen)) ?? .allScreens
+    }
+}
+
+/// Helpers for `NSScreen` → stable identifier used by `ScreenAssignment.specific`.
+enum ScreenIdentity {
+    /// Stable per-display ID derived from `CGDirectDisplayID`. Survives sleep
+    /// and (mostly) hot-plug; the exact same display will return the same ID.
+    static func uuid(for screen: NSScreen) -> String? {
+        guard let num = screen.deviceDescription[NSDeviceDescriptionKey("NSScreenNumber")] as? NSNumber else { return nil }
+        let displayID = CGDirectDisplayID(num.uint32Value)
+        if let cfUUID = CGDisplayCreateUUIDFromDisplayID(displayID)?.takeRetainedValue() {
+            return CFUUIDCreateString(nil, cfUUID) as String
+        }
+        // Fallback to the raw display ID as a string. Less stable but better
+        // than nothing.
+        return String(displayID)
+    }
+
+    static func screen(forUUID uuid: String) -> NSScreen? {
+        for s in NSScreen.screens {
+            if ScreenIdentity.uuid(for: s) == uuid { return s }
+        }
+        return nil
+    }
+
+    static func displayName(for screen: NSScreen) -> String {
+        screen.localizedName
+    }
 }
 
 /// Per-profile dock-visual UserDefaults keys. Anything in this set is
@@ -126,6 +185,18 @@ final class ProfileManager: ObservableObject {
         }
         NotificationCenter.default.post(name: Self.listChanged, object: nil)
         return new.id
+    }
+
+    func setScreen(_ id: UUID, _ screen: ScreenAssignment) {
+        guard let idx = profiles.firstIndex(where: { $0.id == id }) else { return }
+        guard profiles[idx].screen != screen else { return }
+        profiles[idx].screen = screen
+        Self.saveProfiles(profiles, defaults: defaults, key: kProfiles)
+        NotificationCenter.default.post(name: Self.listChanged, object: nil)
+        // If this is the active profile, the dock window layout depends on it.
+        if id == activeID {
+            NotificationCenter.default.post(name: Self.activeChanged, object: nil)
+        }
     }
 
     func renameProfile(_ id: UUID, to newName: String) {
