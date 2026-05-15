@@ -103,6 +103,11 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             self?.rebuildStatusItemMenu()
         }
+        NotificationCenter.default.addObserver(
+            forName: ProfileManager.editingDockChanged, object: nil, queue: .main
+        ) { [weak self] _ in
+            self?.rebuildStatusItemMenu()
+        }
 
         // Open Settings window on first launch
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
@@ -194,6 +199,28 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         profilesItem.submenu = sub
         menu.addItem(profilesItem)
 
+        // Docks submenu (members of the active profile)
+        let docksItem = NSMenuItem(title: "Docks", action: nil, keyEquivalent: "")
+        let docksMenu = NSMenu(title: "Docks")
+        for dockID in mgr.activeProfile.dockIDs {
+            if let dock = mgr.dock(id: dockID) {
+                let title = "\(dock.name) — \(dock.screen.label)"
+                let mi = NSMenuItem(title: title, action: #selector(selectEditingDock(_:)), keyEquivalent: "")
+                mi.target = self
+                mi.representedObject = dock.id.uuidString
+                mi.state = (dock.id == mgr.editingDockID) ? .on : .off
+                docksMenu.addItem(mi)
+            }
+        }
+        docksMenu.addItem(.separator())
+        docksMenu.addItem(withTitle: "Add Dock to Active Profile…", action: #selector(addDockToActive), keyEquivalent: "").target = self
+        let remove = NSMenuItem(title: "Remove Editing Dock", action: #selector(removeEditingDock), keyEquivalent: "")
+        remove.target = self
+        remove.isEnabled = mgr.activeProfile.dockIDs.count > 1
+        docksMenu.addItem(remove)
+        docksItem.submenu = docksMenu
+        menu.addItem(docksItem)
+
         menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
@@ -203,6 +230,32 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func rebuildStatusItemMenu() {
         statusItem?.menu = buildStatusMenu()
+    }
+
+    @objc func selectEditingDock(_ sender: NSMenuItem) {
+        guard let s = sender.representedObject as? String, let uuid = UUID(uuidString: s) else { return }
+        ProfileManager.shared.setEditingDock(uuid)
+    }
+
+    @objc func addDockToActive() {
+        let mgr = ProfileManager.shared
+        guard let name = promptForString(title: "Add Dock", message: "Name for the new dock:", defaultValue: "New Dock") else { return }
+        _ = mgr.addDock(name: name, in: mgr.activeProfileID)
+    }
+
+    @objc func removeEditingDock() {
+        let mgr = ProfileManager.shared
+        guard mgr.activeProfile.dockIDs.count > 1 else { return }
+        guard let dock = mgr.dock(id: mgr.editingDockID) else { return }
+        let alert = NSAlert()
+        alert.messageText = "Remove dock \"\(dock.name)\"?"
+        alert.informativeText = "This removes its pinned apps and settings. This cannot be undone."
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Remove")
+        alert.addButton(withTitle: "Cancel")
+        if alert.runModal() == .alertFirstButtonReturn {
+            mgr.removeDock(dock.id)
+        }
     }
 
     @objc func selectProfile(_ sender: NSMenuItem) {

@@ -135,6 +135,18 @@ private struct ProfileRow: View {
                         .padding(.leading, 22)
                 }
             }
+            HStack {
+                Button {
+                    if let n = Prompt.string(title: "Add Dock", defaultValue: "New Dock") {
+                        _ = mgr.addDock(name: n, in: profile.id)
+                    }
+                } label: { Label("Add Dock", systemImage: "plus.rectangle.on.rectangle") }
+                .buttonStyle(.borderless)
+                .controlSize(.small)
+                Spacer()
+            }
+            .padding(.leading, 22)
+            .padding(.top, 2)
         }
         .padding(8)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.primary.opacity(0.03)))
