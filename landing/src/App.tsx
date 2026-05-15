@@ -48,7 +48,7 @@ import {
   SiVenmo,
   SiZelle,
 } from "react-icons/si";
-import { FaEthereum } from "react-icons/fa";
+import { FaEthereum, FaLinkedin } from "react-icons/fa";
 import type { IconType } from "react-icons";
 
 const APP_VERSION = "0.3.2";
@@ -283,6 +283,76 @@ function Features() {
   );
 }
 
+function Team() {
+  const cardBg = useColorModeValue("white", "whiteAlpha.50");
+  const cardBorder = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
+  const subtle = useColorModeValue("gray.600", "gray.400");
+  return (
+    <Container maxW="4xl" py={{ base: 16, md: 24 }}>
+      <VStack spacing={3} textAlign="center" mb={10}>
+        <Heading size="2xl" letterSpacing="-0.02em">
+          Meet the Team
+        </Heading>
+      </VStack>
+      <Flex justify="center">
+        <Box
+          bg={cardBg}
+          borderWidth="1px"
+          borderColor={cardBorder}
+          borderRadius="2xl"
+          p={{ base: 6, md: 8 }}
+          maxW="md"
+          w="100%"
+          textAlign="center"
+        >
+          <Flex justify="center" mb={5}>
+            <Box
+              boxSize={{ base: "160px", md: "180px" }}
+              borderRadius="full"
+              overflow="hidden"
+              borderWidth="1px"
+              borderColor={cardBorder}
+            >
+              <Image
+                src="/team/spencer-hill.jpg"
+                alt="Spencer Hill"
+                w="100%"
+                h="100%"
+                objectFit="cover"
+              />
+            </Box>
+          </Flex>
+          <Heading size="lg" mb={1} letterSpacing="-0.01em">
+            Spencer Hill
+          </Heading>
+          <Text color={subtle} mb={4}>
+            Founder &amp; Lead Engineer
+          </Text>
+          <Text color={subtle} fontSize="sm" mb={6} textAlign="left">
+            Spencer leads The Portland Company with two decades of web
+            development expertise. He has evolved from pioneering web
+            development to directing a full-stack team delivering iOS and
+            Android applications, blockchain solutions, and AI-powered
+            systems that transform business operations. Focus Dock is his
+            love letter to the Mac — the dock Apple never shipped.
+          </Text>
+          <Button
+            as="a"
+            href="https://www.linkedin.com/in/spencerdennishill/"
+            target="_blank"
+            rel="noopener"
+            leftIcon={<Icon as={FaLinkedin} />}
+            variant="outline"
+            w="100%"
+          >
+            Connect on LinkedIn
+          </Button>
+        </Box>
+      </Flex>
+    </Container>
+  );
+}
+
 function Download() {
   const cardBg = useColorModeValue("white", "whiteAlpha.50");
   const cardBorder = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
@@ -337,7 +407,11 @@ function Footer({ onDonate }: { onDonate: () => void }) {
           gap={4}
         >
           <Text fontSize="sm" color={subtle}>
-            © {new Date().getFullYear()} The Portland Company.
+            ©{" "}{new Date().getFullYear()}{" "}
+            <Link href="https://theportlandcompany.com" isExternal>
+              The Portland Company
+            </Link>
+            .
           </Text>
           <HStack spacing={6} fontSize="sm" color={subtle}>
             <Link
@@ -512,6 +586,7 @@ export default function App() {
       <Nav onDonate={donate.onOpen} />
       <Hero />
       <Features />
+      <Team />
       <Download />
       <Footer onDonate={donate.onOpen} />
       <DonateModal isOpen={donate.isOpen} onClose={donate.onClose} />
