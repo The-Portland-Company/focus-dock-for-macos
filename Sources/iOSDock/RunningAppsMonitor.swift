@@ -83,7 +83,10 @@ final class RunningAppsMonitor: ObservableObject {
             let id = idCache[key] ?? UUID()
             idCache[key] = id
             let name = app.localizedName ?? url.deletingPathExtension().lastPathComponent
-            let icon = app.icon ?? NSWorkspace.shared.icon(forFile: path)
+            // Route through IconCache so the running-app tile gets the same
+            // 256×256 rasterization as pinned items. NSRunningApplication.icon
+            // hands back a 32×32 rep which SwiftUI upscales to a blurry mess.
+            let icon = IconCache.shared.icon(for: path)
             result.append(RunningAppEntry(id: id, pid: app.processIdentifier, path: path, name: name, icon: icon))
         }
         idCache = idCache.filter { seenPaths.contains($0.key) }
