@@ -75,6 +75,10 @@ final class MinimizedMonitor: ObservableObject {
     /// Restore the window: clear AXMinimized, then activate the app so the
     /// window comes to the front. Mirrors a click on a native dock genie tile.
     func unminimize(_ window: MinimizedWindow) {
+        // Let MinimizeAnimator run the reverse fly-out animation and restore
+        // the window's CGS alpha (set to 0 at minimize time so the OS
+        // animation played invisibly).
+        MinimizeAnimator.shared.willUnminimize(window)
         let axApp = AXUIElementCreateApplication(window.pid)
         guard let axWindows = copyAttribute(axApp, kAXWindowsAttribute) as? [AXUIElement] else { return }
         for w in axWindows {

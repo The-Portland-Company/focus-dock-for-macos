@@ -3,6 +3,24 @@ import AppKit
 import ApplicationServices
 import os
 
+// MARK: - Private SkyLight / AX SPI bridges
+//
+// These let us hide an arbitrary on-screen window (any app, any process) by
+// setting its CGS alpha to 0. macOS still runs its own minimize/unminimize
+// animation, but on an invisible window — so our custom fly-to-dock animation
+// is the only thing the user sees.
+
+private typealias CGSConnection = UInt32
+
+@_silgen_name("CGSMainConnectionID")
+private func CGSMainConnectionID() -> CGSConnection
+
+@_silgen_name("CGSSetWindowAlpha")
+private func CGSSetWindowAlpha(_ cid: CGSConnection, _ wid: CGWindowID, _ alpha: CGFloat) -> Int32
+
+@_silgen_name("_AXUIElementGetWindow")
+private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
+
 /// Watches every regular running app for `kAXWindowMiniaturizedNotification`
 /// and plays a custom overlay animation that flies an icon from the window's
 /// last known frame to the matching tile in our custom dock. Complements the
@@ -16,6 +34,14 @@ final class MinimizeAnimator {
     private var observers: [pid_t: AXObserver] = [:]
     private let ownPID = ProcessInfo.processInfo.processIdentifier
     private var workspaceObservers: [NSObjectProtocol] = []
+
+    /// Last visible frame per CGWindowID, captured at the moment of minimize.
+    /// Used as the destination for the reverse (unminimize) animation so the
+    /// icon flies back to where the window will reappear.
+    private var lastFrames: [CGWindowID: CGRect] = [:]
+    /// Bundle path per CGWindowID — needed at unminimize time to look up the
+    /// matching dock-icon source point and the app icon for the overlay.
+    private var bundlePaths: [CGWindowID: String] = [:]
 
     func start() {
         guard AXIsProcessTrusted() else {
@@ -70,17 +96,57 @@ final class MinimizeAnimator {
         let path = bundleURL.resolvingSymlinksInPath().path
 
         let sourceFrame = windowAXFrame(axWindow) ?? .zero
+
+        // Cache pre-minimize state so we can fly the icon back to the same
+        // spot when the user unminimizes via our dock tile.
+        var cgWindowID: CGWindowID = 0
+        if _AXUIElementGetWindow(axWindow, &cgWindowID) == .success, cgWindowID != 0 {
+            if sourceFrame.width > 1 {
+                lastFrames[cgWindowID] = sourceFrame
+            }
+            bundlePaths[cgWindowID] = path
+            // Hide the real window so the OS's own minimize animation plays on
+            // an invisible target — only our custom overlay is visible.
+            _ = CGSSetWindowAlpha(CGSMainConnectionID(), cgWindowID, 0)
+        }
+
         guard let target = DockTargetLocator.frame(forAppPath: path) else {
             Self.log.info("no dock target for \(path, privacy: .public) — skipping animation")
             return
         }
         let icon = IconCache.shared.icon(for: path)
-        // AXObserver callback already runs on main; dispatch to next runloop tick
-        // anyway so AppKit can finish handling the OS minimize before our panel
-        // tries to order itself in front.
         RunLoop.main.perform(inModes: [.common]) {
-            MinimizeFlyOverlay.fly(icon: icon, from: sourceFrame, to: target)
+            MinimizeFlyOverlay.fly(icon: icon, from: sourceFrame, to: target, completion: nil)
         }
+    }
+
+    /// Called by `MinimizedMonitor.unminimize(_:)` immediately before it sets
+    /// `kAXMinimizedAttribute = false`. We fly the icon back from the matching
+    /// dock tile to the window's pre-minimize frame, then restore the window's
+    /// alpha (which we set to 0 at minimize time) so the real window becomes
+    /// visible. Timed so the alpha restore happens after the system's own
+    /// unminimize animation has finished — the user only ever sees our flight.
+    func willUnminimize(_ window: MinimizedWindow) {
+        let wid = window.cgWindowID
+        let target = lastFrames[wid] ?? .zero
+        let source = DockTargetLocator.frameForMinimizedTile(id: window.id) ?? .zero
+        let icon = window.appIcon
+        let cid = CGSMainConnectionID()
+        let restoreAlpha: () -> Void = {
+            _ = CGSSetWindowAlpha(cid, wid, 1)
+            self.lastFrames.removeValue(forKey: wid)
+            self.bundlePaths.removeValue(forKey: wid)
+        }
+        if source.width < 1 && target.width < 1 {
+            // No useful endpoints — restore alpha after a short delay so the
+            // OS unminimize animation completes invisibly first.
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.35, execute: restoreAlpha)
+            return
+        }
+        // Fly from dock tile -> window's last visible frame, then reveal.
+        // Swap from/to so the icon expands as it flies out (matching native
+        // unminimize feel).
+        MinimizeFlyOverlay.fly(icon: icon, from: source, to: target.width > 1 ? target : source.insetBy(dx: -120, dy: -120), completion: restoreAlpha)
     }
 
     /// Returns the window's frame in NSWindow screen coordinates (origin
@@ -119,6 +185,20 @@ private let miniaturizeCallback: AXObserverCallback = { _, element, notification
 /// across every dock window managed by this AppDelegate.
 enum DockTargetLocator {
     private static let log = Logger(subsystem: "com.theportlandcompany.FocusDock", category: "MinAnim")
+
+    /// Screen frame for a specific minimized-window tile id (the UUID
+    /// registered by MinimizedTileView via `trackItemFrame`). Used as the
+    /// source position for the reverse fly-out animation on unminimize.
+    static func frameForMinimizedTile(id: UUID) -> CGRect? {
+        guard let appDel = AppDelegate.shared,
+              let f = ItemFrameRegistry.shared.frames[id] else { return nil }
+        for ctrl in appDel.dockWindows {
+            guard let panelFrame = ctrl.window?.frame else { continue }
+            let contentSize = ctrl.window?.contentView?.bounds.size ?? .zero
+            return convertToScreen(dockFrame: f, panelFrame: panelFrame, contentSize: contentSize)
+        }
+        return nil
+    }
 
     static func frame(forAppPath path: String) -> CGRect? {
         let normPath = normalized(path)
@@ -182,7 +262,7 @@ enum DockTargetLocator {
 /// frame from the source window position to the dock-icon target. Fades out
 /// at the end so the user reads the motion as "this window landed here."
 enum MinimizeFlyOverlay {
-    static func fly(icon: NSImage, from sourceRect: CGRect, to target: CGRect) {
+    static func fly(icon: NSImage, from sourceRect: CGRect, to target: CGRect, completion: (() -> Void)? = nil) {
         let startFrame: NSRect
         if sourceRect.width > 1, sourceRect.height > 1 {
             // Start as a square sized to fit inside the original window, capped
@@ -236,6 +316,7 @@ enum MinimizeFlyOverlay {
                 panel.animator().alphaValue = 0
             }, completionHandler: {
                 panel.orderOut(nil)
+                completion?()
             })
         })
     }
