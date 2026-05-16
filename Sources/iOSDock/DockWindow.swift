@@ -555,6 +555,19 @@ struct DockView: View {
         }
     }
 
+    /// Alignment used to place the (possibly narrow) chrome bar inside the
+    /// full-size window rect. Centers on the long axis, flushes to the dock
+    /// edge on the short axis. This makes narrow (!fillWidth) docks appear
+    /// centered while still attaching to the screen edge.
+    private var barPlacementAlignment: Alignment {
+        switch prefs.edge {
+        case .bottom: return .bottom
+        case .top: return .top
+        case .left: return .leading
+        case .right: return .trailing
+        }
+    }
+
     /// Dock-panel shape with corners squared off on the edge that's flush to
     /// the screen, so it matches the native Dock when Flush-with-Edge is on.
     private var dockShape: UnevenRoundedRectangle {
@@ -741,22 +754,17 @@ struct DockView: View {
             let _ = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - scaledIcon) : 0
 
             ZStack(alignment: dockAlignment) {
-                // The chrome defines the visual bar. The icon content is overlaid
-                // and explicitly centered inside the chrome's exact bounds.
-                // This guarantees icons (all types) are geometrically centered
-                // within the rounded dock material, independent of window headroom
-                // and magnification.
-                let barFrame = dockChrome
-                    .contextMenu {
-                        editDockContextMenu
-                    }
+                // The chrome bar (with icons overlaid directly on it for perfect
+                // v/h centering inside the visual container). We wrap it in a
+                // full-size .frame using barPlacementAlignment so narrow docks
+                // are centered on the long axis while still flush to the edge.
+                // This fixes both the "icons not centered in container" bug and
+                // ensures the dock is always visible.
+                let chrome = dockChrome
                     .frame(
                         width: isVertical ? restingThickness : (prefs.fillWidth ? nil : barWidth),
                         height: isVertical ? (prefs.fillWidth ? nil : barWidth) : restingThickness
                     )
-
-                barFrame
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isVertical ? .top : .leading)
                     .overlay(alignment: .center) {
                         Group {
                             if isVertical {
@@ -784,6 +792,13 @@ struct DockView: View {
                             }
                         }
                     }
+                    .contextMenu {
+                        editDockContextMenu
+                    }
+
+                chrome
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: barPlacementAlignment)
+
                 if prefs.isEditingLayout {
                     EditModePill()
                         .padding(8)
