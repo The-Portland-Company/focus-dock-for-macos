@@ -15,8 +15,8 @@ targets:
       properties:
         CFBundleName: Focus Dock
         CFBundleDisplayName: "Focus: Dock"
-        CFBundleShortVersionString: "0.5.1"
-        CFBundleVersion: "12"
+        CFBundleShortVersionString: "0.5.2"
+        CFBundleVersion: "13"
         LSMinimumSystemVersion: "13.0"
         NSHighResolutionCapable: true
         LSUIElement: true
@@ -28,8 +28,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.theportlandcompany.FocusDock
         PRODUCT_NAME: "Focus Dock"
-        MARKETING_VERSION: "0.3.2"
-        CURRENT_PROJECT_VERSION: "8"
+        MARKETING_VERSION: "0.3.3"
+        CURRENT_PROJECT_VERSION: "9"
         DEVELOPMENT_TEAM: VP38993WK6
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_HARDENED_RUNTIME: YES
