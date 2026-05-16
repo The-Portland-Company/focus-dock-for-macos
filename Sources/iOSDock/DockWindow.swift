@@ -1,6 +1,7 @@
 import SwiftUI
 import AppKit
 import Combine
+import UniformTypeIdentifiers
 
 /// Hosting controller that hard-zeros every safe-area inset path SwiftUI may
 /// otherwise apply to a borderless `NSPanel`. The Flush-with-Edge bug kept
@@ -155,13 +156,19 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let runningCount = RunningAppsMonitor.shared.apps.count
         // +1 for each divider that's present (one before running apps, one before minimized).
         let dividerCount = (mins > 0 ? 1 : 0) + (runningCount > 0 ? 1 : 0)
-        let count = max(1, self.library.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0) + mins + runningCount + dividerCount)
+        let customDividerCount = self.library.dividers.count
+        let actualSlotCount = max(1, self.library.items.count + (prefs.showFinder ? 1 : 0) + (prefs.showTrash ? 1 : 0) + mins + runningCount + dividerCount + customDividerCount)
         let iconSize = CGFloat(prefs.effectiveIconSize)
         let spacing = CGFloat(prefs.effectiveSpacing)
         let isVerticalEdge = (edge == .left || edge == .right)
         let perpInside = CGFloat(isVerticalEdge ? prefs.effectivePaddingLeft + prefs.effectivePaddingRight : prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
         let perpAlongAxis = CGFloat(isVerticalEdge ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
-        let totalIcons = CGFloat(count) * iconSize + CGFloat(max(0, count - 1)) * spacing
+        let narrowCount = dividerCount + customDividerCount
+        let fullCount = actualSlotCount - narrowCount
+        let gapCount = max(0, actualSlotCount - 1)
+        let gaps = CGFloat(gapCount) * spacing
+        let dividers = CGFloat(narrowCount) * 8
+        let totalIcons: CGFloat = CGFloat(fullCount) * iconSize + dividers + gaps
 
         // The icons may be compressed to fit; the *effective* icon size is what
         // actually appears on screen. Dock thickness is derived from the effective
@@ -387,6 +394,7 @@ enum DockSlot: Identifiable {
     case minimized(MinimizedWindow)
     case divider
     case runningDivider
+    case customDivider(DockDividerBar)
 
     var id: AnyHashable {
         switch self {
@@ -395,15 +403,40 @@ enum DockSlot: Identifiable {
         case .minimized(let w): return AnyHashable(w.id)
         case .divider: return AnyHashable("divider")
         case .runningDivider: return AnyHashable("running-divider")
+        case .customDivider(let d): return AnyHashable(d.id)
         }
     }
 
     /// True if this slot participates in drag-to-reorder / folder-merge.
-    /// Minimized tiles and dividers are protected — they can't be dragged
-    /// and other items can't be dropped onto them.
+    /// Minimized tiles, system dividers, and custom user dividers are protected.
     var isReorderable: Bool {
         if case .item = self { return true }
         return false
+    }
+}
+
+// MARK: - Frame tracking for hover hit-testing (tooltips + drag targets)
+
+extension View {
+    /// Attaches an invisible GeometryReader that records this view's frame
+    /// (in the "dock" named coordinate space) into the shared registry under
+    /// the given id. Used by DockItemView, RunningAppTileView and
+    /// MinimizedTileView so that `onContinuousHover` can reliably identify
+    /// which icon (pinned app, folder, Finder, Trash, running app, or minimized
+    /// window tile) is under the pointer — powering the liquid-glass tooltip
+    /// when `prefs.labelMode == .tooltip`.
+    func trackItemFrame(id: UUID) -> some View {
+        self.background(
+            GeometryReader { proxy in
+                Color.clear
+                    .onAppear {
+                        ItemFrameRegistry.shared.frames[id] = proxy.frame(in: .named("dock"))
+                    }
+                    .onChange(of: proxy.frame(in: .named("dock"))) { new in
+                        ItemFrameRegistry.shared.frames[id] = new
+                    }
+            }
+        )
     }
 }
 
@@ -414,6 +447,11 @@ struct DockView: View {
     @StateObject private var minimized = MinimizedMonitor.shared
     @StateObject private var runningApps = RunningAppsMonitor.shared
     @State private var hoverPoint: CGPoint? = nil
+
+    // Divider Edit mode drag-from-palette state
+    @State private var isDraggingNewDivider: Bool = false
+    @State private var dividerDragPoint: CGPoint? = nil
+    @State private var dividerInsertAfter: UUID? = nil   // the item (or nil for start) to insert after
 
     private var iconSize: CGFloat { CGFloat(prefs.effectiveIconSize) }
     private var spacing: CGFloat { CGFloat(prefs.effectiveSpacing) }
@@ -461,7 +499,22 @@ struct DockView: View {
     private var renderedSlots: [DockSlot] {
         var result: [DockSlot] = []
         if prefs.showFinder { result.append(.item(.app(Self.finderEntry))) }
-        result.append(contentsOf: library.items.map { DockSlot.item($0) })
+
+        // Interleave user-pinned items with any custom divider bars placed
+        // after specific items (or at the start via afterItemID == nil).
+        let divs = library.dividers
+        let startDivs = divs.filter { $0.afterItemID == nil }
+        for d in startDivs {
+            result.append(.customDivider(d))
+        }
+        for item in library.items {
+            result.append(.item(item))
+            let afterThis = divs.filter { $0.afterItemID == item.id }
+            for d in afterThis {
+                result.append(.customDivider(d))
+            }
+        }
+
         let running = runningApps.apps
         if !running.isEmpty {
             result.append(.runningDivider)
@@ -478,11 +531,19 @@ struct DockView: View {
 
     /// Effective per-icon scale to fit content within the dock window length.
     private func effectiveScale(in available: CGFloat) -> CGFloat {
-        let n = max(1, renderedSlots.count)
+        let slots = renderedSlots
+        let iconCount = slots.filter { slotOccupiesIconSpace($0) }.count
+        let divCount = slots.count - iconCount
         let interior = max(0, available - CGFloat(isVertical ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight))
-        let desired = CGFloat(n) * iconSize + CGFloat(max(0, n - 1)) * spacing
+        // Icons scale; dividers use fixed narrow cells. Reserve space for dividers + approx gaps.
+        let iconDesired = CGFloat(iconCount) * iconSize + CGFloat(max(0, iconCount - 1)) * spacing
+        let divDesired = CGFloat(divCount) * customDividerCellWidth + CGFloat(max(0, divCount)) * (spacing * 0.5)
+        let desired = iconDesired + divDesired + CGFloat(max(0, slots.count - iconCount - 1)) * spacing * 0.5
         if desired <= interior { return 1 }
-        return max(0.4, interior / desired)
+        // Only scale the icon portion down if needed.
+        let remaining = max(20, interior - divDesired)
+        if iconDesired <= remaining { return 1 }
+        return max(0.4, remaining / iconDesired)
     }
 
     private var dockAlignment: Alignment {
@@ -558,6 +619,30 @@ struct DockView: View {
         }
     }
 
+    /// Context menu shown on dock background (chrome + icon-row gaps) for
+    /// entering/exiting the divider editing mode ("Edit Dock").
+    @ViewBuilder private var editDockContextMenu: some View {
+        Button {
+            withAnimation(.spring(response: 0.3)) {
+                prefs.isEditingDividers.toggle()
+            }
+        } label: {
+            Label(
+                prefs.isEditingDividers ? "Exit Edit Dock" : "Edit Dock",
+                systemImage: "rectangle.split.2x1"
+            )
+        }
+        if prefs.isEditingDividers {
+            Divider()
+            Button {
+                let last = library.items.last?.id
+                library.insertDivider(after: last)
+            } label: {
+                Label("Add Divider (at end)", systemImage: "plus.rectangle.on.rectangle")
+            }
+        }
+    }
+
     /// Extra left/top offset to the icon row caused by alongHeadroom (the window
     /// is widened symmetrically for mag growth room at ends; the HStack centers
     /// in it). Added to leadingPad so restingCenter matches actual icon centers
@@ -569,40 +654,127 @@ struct DockView: View {
         return max(0, mag - base) / 2
     }
 
+    /// Pure helper (not in a @ViewBuilder context) that classifies gaps around
+    /// protected zones (Finder left, right zone = min-divider + mins + Trash)
+    /// vs. main content so fillWidth spreads only the main icons while protected
+    /// separations stay at the user's Spacing value. Also pre-computes exact
+    /// resting centers for magnification.
+    private func computeLayoutGaps(avail: CGFloat, scaledIcon: CGFloat, scale: CGFloat, leadPadForCalc: CGFloat) -> (userGap: CGFloat, fillGap: CGFloat, restingCenters: [UUID: CGFloat]) {
+        let slots = renderedSlots
+        let n = max(1, slots.count)
+        let userG: CGFloat = spacing * scale
+        var fillG: CGFloat = userG
+        var centers: [UUID: CGFloat] = [:]
+        if n > 0 {
+            let interior = max(0, avail - CGFloat(isVertical ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight))
+            let iconCount = slots.filter { slotOccupiesIconSpace($0) }.count
+            if prefs.fillWidth && n > 1 && iconCount > 1 {
+                var fixedSum: CGFloat = 0
+                var numF: Int = 0
+                for ii in 0..<(n - 1) {
+                    let p = slots[ii]
+                    let nx = slots[ii + 1]
+                    if shouldUseUserGap(between: p, and: nx) {
+                        fixedSum += userG
+                    } else {
+                        numF += 1
+                    }
+                }
+                // Only icon slots contribute to scalable width for fill calc.
+                let iconsT = CGFloat(iconCount) * scaledIcon
+                let rem = max(0, interior - iconsT - fixedSum)
+                fillG = numF > 0 ? rem / CGFloat(numF) : 0
+            }
+            var pos = leadPadForCalc
+            for ii in 0..<n {
+                let sl = slots[ii]
+                let cellW = slotOccupiesIconSpace(sl) ? scaledIcon : customDividerCellWidth
+                let cen = pos + cellW / 2
+                if case .item(let it) = sl {
+                    centers[it.id] = cen
+                } else if case .runningApp(let r) = sl {
+                    centers[r.id] = cen
+                }
+                if ii < n - 1 {
+                    let g = shouldUseUserGap(between: sl, and: slots[ii + 1]) ? userG : fillG
+                    pos += cellW + g
+                }
+            }
+        }
+        return (userG, fillG, centers)
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let avail = isVertical ? proxy.size.height : proxy.size.width
             let scale = effectiveScale(in: avail)
             let scaledIcon = iconSize * scale
-            // When "Fill width" is on, compute spacing automatically so the icons
-            // are evenly distributed across the available interior width.
-            let interior = max(0, avail - CGFloat(isVertical ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight))
-            let n = max(1, renderedSlots.count)
-            let autoSpacing: CGFloat = n > 1 ? max(0, (interior - CGFloat(n) * scaledIcon) / CGFloat(n - 1)) : 0
-            let scaledSpacing = prefs.fillWidth ? autoSpacing : spacing * scale
+            let leadPadForCalc = CGFloat(isVertical ? prefs.effectivePaddingTop : prefs.effectivePaddingLeft) + headroomExtra
+
+            let (userGap, fillGap, restingIDToCenter) = computeLayoutGaps(
+                avail: avail,
+                scaledIcon: scaledIcon,
+                scale: scale,
+                leadPadForCalc: leadPadForCalc
+            )
+
+            // Compute the actual visual bar width so the dock chrome background resizes dynamically
+            // to the current number of items + custom dividers (no huge empty gaps on right).
+            let barWidth: CGFloat = {
+                var packed: CGFloat = 0
+                for (i, slot) in renderedSlots.enumerated() {
+                    let w = slotOccupiesIconSpace(slot) ? scaledIcon : customDividerCellWidth
+                    packed += w
+                    if i < renderedSlots.count - 1 {
+                        let g = shouldUseUserGap(between: slot, and: renderedSlots[i + 1]) ? userGap : fillGap
+                        packed += g
+                    }
+                }
+                return CGFloat(prefs.effectivePaddingLeft) + packed + CGFloat(prefs.effectivePaddingRight)
+            }()
+
+            // Ideal along dimension for the window to make the background resize dynamically to the content
+            let headroom = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - scaledIcon) : 0
+            _ = barWidth + headroom // idealAlong kept for future dynamic window sizing
 
             ZStack(alignment: dockAlignment) {
                 // Native-Dock-style chrome sized to the resting thickness so it
                 // doesn't grow with icon magnification.
                 dockChrome
+                    .contextMenu {
+                        editDockContextMenu
+                    }
                     .frame(
-                        width: isVertical ? restingThickness : nil,
-                        height: isVertical ? nil : restingThickness
+                        width: isVertical ? restingThickness : (prefs.fillWidth ? nil : barWidth),
+                        height: isVertical ? (prefs.fillWidth ? nil : barWidth) : restingThickness
                     )
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isVertical ? .top : .leading)
 
                 Group {
                     if isVertical {
-                        VStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
+                        let hPad = CGFloat(prefs.effectivePaddingLeft) // even left/right margin for vertical docks
+                        VStack(spacing: 0) { iconRow(iconSize: scaledIcon, userGap: userGap, fillGap: fillGap) }
                             .padding(.top, CGFloat(prefs.effectivePaddingTop))
                             .padding(.bottom, CGFloat(prefs.effectivePaddingBottom))
-                            .padding(.leading, CGFloat(prefs.effectivePaddingLeft))
-                            .padding(.trailing, CGFloat(prefs.effectivePaddingRight))
+                            .padding(.leading, hPad)
+                            .padding(.trailing, hPad)
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                editDockContextMenu
+                            }
+                            .frame(maxWidth: restingThickness, maxHeight: .infinity, alignment: .center)
                     } else {
-                        HStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
-                            .padding(.top, CGFloat(prefs.effectivePaddingTop))
-                            .padding(.bottom, CGFloat(prefs.effectivePaddingBottom))
+                        let vPad = CGFloat(prefs.effectivePaddingTop) // even top/bottom margin controlled by Padding setting
+                        HStack(spacing: 0) { iconRow(iconSize: scaledIcon, userGap: userGap, fillGap: fillGap) }
+                            .padding(.top, vPad)
+                            .padding(.bottom, vPad)
                             .padding(.leading, CGFloat(prefs.effectivePaddingLeft))
                             .padding(.trailing, CGFloat(prefs.effectivePaddingRight))
+                            .contentShape(Rectangle())
+                            .contextMenu {
+                                editDockContextMenu
+                            }
+                            .frame(maxWidth: .infinity, maxHeight: restingThickness, alignment: .center)
                     }
                 }
                 if prefs.isEditingLayout {
@@ -610,8 +782,27 @@ struct DockView: View {
                         .padding(8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: oppositeAlignment)
                 }
+                if prefs.isEditingDividers {
+                    DividerEditPill(exitAction: { prefs.isEditingDividers = false })
+                        .padding(8)
+                        .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: oppositeAlignment)
+
+                    // Palette for creating new dividers (tap to add at end; visual source of the bubble style)
+                    DividerPalette(
+                        isVertical: isVertical,
+                        onAddAtEnd: {
+                            let last = library.items.last?.id
+                            library.insertDivider(after: last)
+                        }
+                    )
+                    .padding(.horizontal, 12)
+                    .padding(.vertical, 6)
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isVertical ? .topLeading : .bottomLeading)
+                    .offset(x: isVertical ? 0 : 0, y: isVertical ? 40 : -40) // park beside the exit pill a bit
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: dockAlignment)
+            .environment(\.dockRestingCenters, restingIDToCenter)
         }
         .ignoresSafeArea()
         .coordinateSpace(name: "dock")
@@ -658,6 +849,8 @@ struct DockView: View {
         let pad: CGFloat = 14
         var picked: (id: UUID, name: String)? = nil
         let frames = ItemFrameRegistry.shared.frames
+
+        // 1. Pinned regular apps, folders, Finder, and Trash (via DockItemView)
         let items = renderedItems
         for item in items {
             if let f = frames[item.id], f.insetBy(dx: -pad, dy: -pad).contains(point) {
@@ -665,6 +858,28 @@ struct DockView: View {
                 break
             }
         }
+
+        // 2. Running / recent (unpinned) apps — now participate in hover/magnify too
+        if picked == nil {
+            for entry in runningApps.apps {
+                if let f = frames[entry.id], f.insetBy(dx: -pad, dy: -pad).contains(point) {
+                    picked = (entry.id, entry.name)
+                    break
+                }
+            }
+        }
+
+        // 3. Minimized window tiles (show window title, falling back to app name)
+        if picked == nil {
+            for win in minimized.windows {
+                if let f = frames[win.id], f.insetBy(dx: -pad, dy: -pad).contains(point) {
+                    let label = win.title.isEmpty ? win.appName : win.title
+                    picked = (win.id, label)
+                    break
+                }
+            }
+        }
+
         if let p = picked {
             DockTooltipPanel.shared.show(text: p.name, near: p.id, edge: prefs.edge)
         } else {
@@ -679,24 +894,86 @@ struct DockView: View {
         }
     }
 
-    @ViewBuilder private func itemViews(iconSize: CGFloat, spacing: CGFloat) -> some View {
-        ForEach(Array(renderedSlots.enumerated()), id: \.element.id) { idx, slot in
-            switch slot {
-            case .item(let item):
-                DockItemView(
-                    item: item,
-                    index: idx,
-                    iconSize: iconSize,
-                    spacing: spacing,
-                    dragState: dragState
-                )
-            case .runningApp(let entry):
-                RunningAppTileView(entry: entry, iconSize: iconSize)
-            case .minimized(let window):
-                MinimizedTileView(window: window, iconSize: iconSize, isVertical: isVertical)
-            case .divider, .runningDivider:
-                DockDivider(isVertical: isVertical, iconSize: iconSize)
+    // MARK: - Variable-gap layout helpers (fix for massive protected-zone gaps)
+
+    /// Returns true for gaps that must stay at the user's Spacing (small/natural
+    /// separation): after Finder (left protected), before/around/inside the right
+    /// protected zone (min-divider, minimized tiles, Trash). All other gaps (main
+    /// pinned + running) use the fill/auto value when fillWidth is enabled.
+    private func shouldUseUserGap(between prev: DockSlot, and next: DockSlot) -> Bool {
+        if isLeftProtectedSlot(prev) || isRightProtectedSlot(next) {
+            return true
+        }
+        if isRightProtectedSlot(prev) && isRightProtectedSlot(next) {
+            return true
+        }
+        return false
+    }
+
+    private func isLeftProtectedSlot(_ s: DockSlot) -> Bool {
+        if case .item(let it) = s { return it.id == Self.finderID }
+        return false
+    }
+
+    private func isRightProtectedSlot(_ s: DockSlot) -> Bool {
+        if case .item(let it) = s { return it.id == Self.trashID }
+        if case .divider = s { return true }
+        if case .minimized = s { return true }
+        if case .customDivider = s { return true } // visual dividers use user spacing, protected from fillWidth spreading
+        return false
+    }
+
+    /// Returns true for slots that represent full-size icons (apps, folders,
+    /// running, minimized). Custom and system dividers use a narrow fixed
+    /// cell so they act as thin visual splits without "costing" an icon slot.
+    private func slotOccupiesIconSpace(_ s: DockSlot) -> Bool {
+        switch s {
+        case .item, .runningApp, .minimized:
+            return true
+        case .divider, .runningDivider, .customDivider:
+            return false
+        }
+    }
+
+    /// The fixed visual cell width (points) allocated to a custom divider slot.
+    /// The bubble itself is even narrower and centered inside it.
+    private var customDividerCellWidth: CGFloat { 8 }
+
+    @ViewBuilder private func iconRow(iconSize: CGFloat, userGap: CGFloat, fillGap: CGFloat) -> some View {
+        let slots = renderedSlots
+        let nn = slots.count
+        ForEach(Array(slots.enumerated()), id: \.element.id) { idx, slot in
+            Group {
+                slotContent(for: slot, index: idx, iconSize: iconSize, spacingForFallback: fillGap, userGap: userGap, fillGap: fillGap)
+                if idx < nn - 1 {
+                    let g = shouldUseUserGap(between: slot, and: slots[idx + 1]) ? userGap : fillGap
+                    Color.clear
+                        .frame(width: isVertical ? 0 : g, height: isVertical ? g : 0)
+                }
             }
+        }
+    }
+
+    @ViewBuilder private func slotContent(for slot: DockSlot, index: Int, iconSize: CGFloat, spacingForFallback: CGFloat, userGap: CGFloat, fillGap: CGFloat) -> some View {
+        switch slot {
+        case .item(let item):
+            DockItemView(
+                item: item,
+                index: index,
+                iconSize: iconSize,
+                spacing: spacingForFallback,
+                dragState: dragState
+            )
+        case .runningApp(let entry):
+            RunningAppTileView(entry: entry, iconSize: iconSize, index: index, spacing: spacingForFallback)
+        case .minimized(let window):
+            MinimizedTileView(window: window, iconSize: iconSize, isVertical: isVertical)
+        case .divider, .runningDivider:
+            let dSpacing = isRightProtectedSlot(slot) ? userGap : fillGap
+            DockDivider(isVertical: isVertical, iconSize: iconSize, spacing: dSpacing)
+        case .customDivider(let d):
+            let dSpacing = userGap // always user spacing around custom visual dividers
+            BubbleDividerView(isVertical: isVertical, iconSize: iconSize, spacing: dSpacing, divider: d)
         }
     }
 }
@@ -711,6 +988,7 @@ struct MinimizedTileView: View {
     let window: MinimizedWindow
     let iconSize: CGFloat
     let isVertical: Bool
+    @EnvironmentObject var prefs: Preferences
 
     var body: some View {
         let cellW = isVertical ? iconSize : iconSize
@@ -752,7 +1030,8 @@ struct MinimizedTileView: View {
         .frame(width: cellW, height: cellH)
         .contentShape(Rectangle())
         .onTapGesture { MinimizedMonitor.shared.unminimize(window) }
-        .help(window.title.isEmpty ? window.appName : window.title)
+        .trackItemFrame(id: window.id)
+        .help(prefs.labelMode == .tooltip ? "" : (window.title.isEmpty ? window.appName : window.title))
     }
 }
 
@@ -761,59 +1040,230 @@ struct MinimizedTileView: View {
 struct RunningAppTileView: View {
     let entry: RunningAppEntry
     let iconSize: CGFloat
+    let index: Int
+    let spacing: CGFloat
     @EnvironmentObject var prefs: Preferences
     @StateObject private var runningMonitor = RunningAppsMonitor.shared
 
-    private var isActive: Bool {
-        runningMonitor.isAppActive(entry.path)
+    @Environment(\.dockHoverPoint) private var hoverPoint
+    @Environment(\.dockIsVertical) private var isVertical
+    @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
+    @Environment(\.dockMagnifyMax) private var magnifyMax
+    @Environment(\.dockLeadingPad) private var leadingPad
+    @Environment(\.dockRestingCenters) private var restingCenters
+
+    /// Resting center of this item along the dock axis. Matches the formula
+    /// used by DockItemView so that recent-app tiles participate in the exact
+    /// same per-icon Gaussian magnification (and neighbor-push) system.
+    private var restingCenterAlongAxis: CGFloat {
+        if let c = restingCenters[entry.id] {
+            return c
+        }
+        return leadingPad + CGFloat(index) * (iconSize + spacing) + iconSize / 2
+    }
+
+    private var magnificationScale: CGFloat {
+        guard magnifyEnabled, let hp = hoverPoint else { return 1 }
+        let mouse = isVertical ? hp.y : hp.x
+        let dist = abs(mouse - restingCenterAlongAxis)
+        // Falloff over ~2.5x the icon size (identical to DockItemView)
+        let sigma = iconSize * 1.6
+        let g = exp(-(dist * dist) / (2 * sigma * sigma))
+        let maxScale = max(1.0, magnifyMax / iconSize)
+        return 1 + (maxScale - 1) * g
+    }
+
+    private var state: AppRunningState {
+        // Ephemeral tiles are definitionally running; frontmost is what matters for strong vs subtle.
+        let st = runningMonitor.runningState(for: entry.path)
+        return AppRunningState(isRunning: true, isFrontmost: st.isFrontmost)
     }
 
     var body: some View {
-        VStack(spacing: 4) {
-            Image(nsImage: entry.icon)
-                .resizable()
-                .interpolation(.high)
-                .frame(width: iconSize, height: iconSize)
-                .activeGlow(isActive: isActive, style: prefs.indicatorStyle)
-            // Dot only in classic dot style (these tiles are inherently "running").
+        let magScale = magnificationScale
+
+        // Normalized to the same iconSize-centered cell as DockItemView so all icons
+        // (pinned + running + minimized) sit on the exact same vertical and horizontal center line.
+        ZStack {
+            ZStack {
+                let scale = magScale
+                let displaySize = iconSize * scale
+                let cellW = isVertical ? iconSize : max(iconSize, displaySize)
+                let cellH = isVertical ? max(iconSize, displaySize) : iconSize
+                Color.clear
+                    .frame(width: cellW, height: cellH)
+                    .overlay(alignment: .center) {
+                        Image(nsImage: entry.icon)
+                            .resizable()
+                            .interpolation(.high)
+                            .frame(width: displaySize, height: displaySize)
+                            .activeGlow(isRunning: state.isRunning, isFrontmost: state.isFrontmost, style: prefs.indicatorStyle)
+                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
+                    }
+            }
+            .trackItemFrame(id: entry.id)
+
             if prefs.indicatorStyle == .dot {
-                Circle()
-                    .fill(Color.primary.opacity(0.6))
-                    .frame(width: 4, height: 4)
+                if state.isFrontmost {
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(Color(nsColor: NSColor.controlAccentColor).opacity(0.85))
+                        .frame(width: 12, height: 2)
+                        .offset(y: iconSize / 2 + 4)
+                } else {
+                    Circle()
+                        .fill(Color.primary.opacity(0.6))
+                        .frame(width: 4, height: 4)
+                        .offset(y: iconSize / 2 + 4)
+                }
             }
         }
-        .frame(width: iconSize, height: iconSize)
+        .frame(width: isVertical ? iconSize : nil, height: isVertical ? nil : iconSize, alignment: .center)
         .contentShape(Rectangle())
         .onTapGesture { RunningAppsMonitor.shared.activate(entry) }
-        .help(entry.name)
+        .help(prefs.labelMode == .tooltip ? "" : entry.name)
     }
 }
 
-/// Vertical (or horizontal when the dock is on a side) divider line marking
-/// the start of the protected minimized-windows zone. Sized relative to the
-/// icon footprint so it scales with the dock.
+/// Thin 1pt divider line that visually separates dock sections:
+/// (pinned apps) — runningDivider — (running apps) — divider — (minimized windows).
+/// To create clear visual breaks, we apply `2 × spacing` (where `spacing` is
+/// the normal effective spacing or fill gap for that divider) as padding on
+/// *both* sides along the dock's primary axis. Combined with the adjacent
+/// layout gap (1×) inserted before/after the divider slot in the iconRow,
+/// this yields an effective gap of 3× the relevant spacing value before the
+/// line and 3× after the line. The line itself stays 1pt thin and is centered
+/// on the cross axis within an icon-sized footprint. Works for both horizontal
+/// and vertical docks. Respects prefs.effectiveSpacing, scale, and fillWidth.
 struct DockDivider: View {
     let isVertical: Bool
     let iconSize: CGFloat
+    let spacing: CGFloat
 
     var body: some View {
-        // The divider occupies a thin layout cell along the dock axis. The
-        // surrounding HStack/VStack adds the normal spacing on each side, so
-        // the divider naturally sits between the protected zone and the
-        // regular apps.
+        let extra = 2 * spacing
         Group {
             if isVertical {
                 Rectangle()
                     .fill(Color.white.opacity(0.18))
                     .frame(width: iconSize * 0.6, height: 1)
+                    .padding(.vertical, extra)
+                    .frame(width: iconSize, alignment: .center)
             } else {
                 Rectangle()
                     .fill(Color.white.opacity(0.18))
                     .frame(width: 1, height: iconSize * 0.6)
+                    .padding(.horizontal, extra)
+                    .frame(height: iconSize, alignment: .center)
             }
         }
-        .frame(width: isVertical ? iconSize : 8, height: isVertical ? 8 : iconSize, alignment: .center)
+        .frame(height: iconSize, alignment: .center) // ensure the divider line is centered in the icon cell area
         .allowsHitTesting(false)
+    }
+}
+
+/// Premium "bubble" visual divider that splits the dock surface with a frosted
+/// glass pill / capsule aesthetic (inspired by macOS Stage Manager separators,
+/// liquid glass, and inset depth). Narrow fixed-width cell, centered bubble.
+/// In Edit Dock mode the bubble is interactive (tap to delete).
+struct BubbleDividerView: View {
+    let isVertical: Bool
+    let iconSize: CGFloat
+    let spacing: CGFloat
+    let divider: DockDividerBar
+
+    @EnvironmentObject var prefs: Preferences
+    @EnvironmentObject var library: AppLibrary
+
+    var body: some View {
+        let bubbleThickness: CGFloat = max(3, min(7, iconSize * 0.12))
+        let bubbleLength: CGFloat = iconSize * 0.72
+
+        let bubbleShape = Capsule(style: .continuous)
+
+        let glassBubble = ZStack {
+            // Frosted glass base (behind-window blur for depth)
+            VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+                .clipShape(bubbleShape)
+                .opacity(0.85)
+
+            // Subtle inner tint / liquid highlight
+            bubbleShape
+                .fill(
+                    LinearGradient(
+                        colors: [
+                            Color.white.opacity(0.18),
+                            Color.white.opacity(0.04),
+                            Color.black.opacity(0.06)
+                        ],
+                        startPoint: isVertical ? .leading : .top,
+                        endPoint: isVertical ? .trailing : .bottom
+                    )
+                )
+                .blendMode(.plusLighter)
+
+            // Crisp inset rim for "splitting" the dock surface
+            bubbleShape
+                .strokeBorder(
+                    LinearGradient(
+                        colors: [Color.white.opacity(0.55), Color.white.opacity(0.15)],
+                        startPoint: .top,
+                        endPoint: .bottom
+                    ),
+                    lineWidth: 0.8
+                )
+
+            // Very subtle center "seam" line for extra split character (horizontal dock)
+            if !isVertical {
+                Rectangle()
+                    .fill(Color.white.opacity(0.25))
+                    .frame(width: 0.6)
+                    .padding(.vertical, bubbleLength * 0.22)
+            }
+        }
+        .frame(
+            width: isVertical ? bubbleLength : bubbleThickness,
+            height: isVertical ? bubbleThickness : bubbleLength
+        )
+        .shadow(color: .black.opacity(0.28), radius: 2.5, x: 0, y: 1)
+        .shadow(color: Color.accentColor.opacity(0.12), radius: 5, x: 0, y: 0) // soft accent glow
+        .overlay(
+            // In edit mode, a small remove affordance on hover/tap
+            Group {
+                if prefs.isEditingDividers {
+                    Button {
+                        library.removeDivider(id: divider.id)
+                    } label: {
+                        Image(systemName: "xmark.circle.fill")
+                            .font(.system(size: 9, weight: .bold))
+                            .foregroundStyle(.white)
+                            .shadow(radius: 1)
+                            .padding(1)
+                    }
+                    .buttonStyle(.plain)
+                    .offset(x: isVertical ? 0 : 6, y: isVertical ? 6 : 0)
+                }
+            }
+        )
+
+        Group {
+            if isVertical {
+                glassBubble
+                    .padding(.vertical, max(0, spacing - 1))
+                    .frame(width: iconSize, alignment: .center)
+            } else {
+                glassBubble
+                    .padding(.horizontal, max(0, spacing - 1))
+                    .frame(height: iconSize, alignment: .center)
+            }
+        }
+        .contentShape(Rectangle())
+        .onTapGesture {
+            if prefs.isEditingDividers {
+                library.removeDivider(id: divider.id)
+            }
+        }
+        .trackItemFrame(id: divider.id) // so drag-to-insert gap detection can see it
+        .allowsHitTesting(prefs.isEditingDividers) // normal mode: purely visual, no hit
     }
 }
 
@@ -840,6 +1290,120 @@ private struct EditModePill: View {
     }
 }
 
+/// Clickable pill shown only in "Edit Dock" (divider) mode. Tapping exits the mode.
+private struct DividerEditPill: View {
+    let exitAction: () -> Void
+    @State private var pulse = false
+
+    var body: some View {
+        Button(action: exitAction) {
+            HStack(spacing: 6) {
+                Image(systemName: "rectangle.split.2x1")
+                    .font(.system(size: 11, weight: .semibold))
+                Text("Exit Edit Dock")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+                Image(systemName: "xmark")
+                    .font(.system(size: 9, weight: .bold))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.accentColor)
+                    .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 1)
+            )
+            .opacity(pulse ? 1.0 : 0.85)
+        }
+        .buttonStyle(.plain)
+        .onAppear { withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) { pulse = true } }
+    }
+}
+
+/// Floating mini-palette that appears in Edit Dock mode. Provides the source
+/// "bubble" visual and quick "add at end" action. (Full drag-to-gap supported
+/// via gap zones below; this is the origination point.)
+private struct DividerPalette: View {
+    let isVertical: Bool
+    let onAddAtEnd: () -> Void
+
+    var body: some View {
+        HStack(spacing: 8) {
+            // Mini sample of the exact bubble style
+            Capsule(style: .continuous)
+                .fill(Color.white.opacity(0.22))
+                .frame(width: isVertical ? 18 : 4, height: isVertical ? 4 : 18)
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.5), lineWidth: 0.6)
+                )
+                .shadow(color: .black.opacity(0.2), radius: 2, x: 0, y: 0.5)
+
+            Text("Add Divider")
+                .font(.system(size: 10, weight: .medium, design: .rounded))
+                .foregroundStyle(.white.opacity(0.95))
+
+            Button(action: onAddAtEnd) {
+                Image(systemName: "plus.circle.fill")
+                    .font(.system(size: 14))
+                    .foregroundStyle(.white)
+            }
+            .buttonStyle(.plain)
+            .help("Add a new visual divider at the end of your pinned items")
+        }
+        .padding(.horizontal, 10)
+        .padding(.vertical, 4)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.black.opacity(0.45))
+                .overlay(
+                    Capsule(style: .continuous)
+                        .stroke(Color.white.opacity(0.15), lineWidth: 0.5)
+                )
+        )
+        .shadow(color: .black.opacity(0.3), radius: 6, x: 0, y: 2)
+    }
+}
+
+/// Compact liquid-glass "Empty" pill for quick trash emptying on right/ctrl-click.
+/// Positioned in the inward headroom above (or beside for vertical docks) the Trash icon.
+private struct EmptyTrashPill: View {
+    let action: () -> Void
+    @State private var pressed = false
+
+    var body: some View {
+        Button(action: action) {
+            HStack(spacing: 3) {
+                Image(systemName: "trash.fill")
+                    .font(.system(size: 9, weight: .bold))
+                Text("Empty")
+                    .font(.system(size: 10, weight: .semibold, design: .rounded))
+            }
+            .foregroundStyle(Color.white)
+            .padding(.horizontal, 7)
+            .padding(.vertical, 2)
+        }
+        .buttonStyle(.plain)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color(.sRGB, red: 0.82, green: 0.18, blue: 0.22, opacity: 0.92))
+                .background(
+                    VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+                        .clipShape(Capsule(style: .continuous))
+                        .opacity(0.55)
+                )
+        )
+        .overlay(
+            Capsule(style: .continuous)
+                .strokeBorder(Color.white.opacity(0.28), lineWidth: 0.7)
+        )
+        .shadow(color: Color.black.opacity(0.32), radius: 3.5, x: 0, y: 1.5)
+        .scaleEffect(pressed ? 0.90 : 1.0)
+        .onLongPressGesture(minimumDuration: 0.01, maximumDistance: 30, pressing: { p in pressed = p }, perform: {})
+        .animation(.spring(response: 0.14, dampingFraction: 0.55), value: pressed)
+    }
+}
+
 // MARK: - Magnification environment
 
 private struct DockHoverPointKey: EnvironmentKey { static let defaultValue: CGPoint? = nil }
@@ -847,6 +1411,7 @@ private struct DockIsVerticalKey: EnvironmentKey { static let defaultValue: Bool
 private struct DockMagnifyEnabledKey: EnvironmentKey { static let defaultValue: Bool = true }
 private struct DockMagnifyMaxKey: EnvironmentKey { static let defaultValue: CGFloat = 110 }
 private struct DockLeadingPadKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+private struct DockRestingCentersKey: EnvironmentKey { static let defaultValue: [UUID: CGFloat] = [:] }
 
 extension EnvironmentValues {
     var dockHoverPoint: CGPoint? {
@@ -868,6 +1433,10 @@ extension EnvironmentValues {
     var dockLeadingPad: CGFloat {
         get { self[DockLeadingPadKey.self] }
         set { self[DockLeadingPadKey.self] = newValue }
+    }
+    var dockRestingCenters: [UUID: CGFloat] {
+        get { self[DockRestingCentersKey.self] }
+        set { self[DockRestingCentersKey.self] = newValue }
     }
 }
 
@@ -902,9 +1471,9 @@ struct DockItemView: View {
     @ObservedObject var dragState: DragState
     @EnvironmentObject var library: AppLibrary
 
-    @State private var frameInDock: CGRect = .zero
     @State private var showFolderPopover: Bool = false
     @State private var folderFormProgress: CGFloat = 0
+    @State private var showEmptyPill: Bool = false
     @EnvironmentObject var prefs: Preferences
     @StateObject private var runningMonitor = RunningAppsMonitor.shared
     @Environment(\.dockHoverPoint) private var hoverPoint
@@ -912,16 +1481,18 @@ struct DockItemView: View {
     @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
     @Environment(\.dockMagnifyMax) private var magnifyMax
     @Environment(\.dockLeadingPad) private var leadingPad
+    @Environment(\.dockRestingCenters) private var restingCenters
 
     /// Resting center of this item along the dock axis. Derived purely from
     /// layout inputs (padding + index*(icon+spacing) + icon/2) so that
     /// neighbor magnification — which reflows the HStack/VStack — does NOT
-    /// change this item's own scale. Using the live `frameInDock` here caused
-    /// a feedback loop (neighbor scales → cell width grows → this item's
-    /// frame shifts → this item's scale recomputes → neighbors shift again),
-    /// which produced the glitchy/blinky magnification animation.
+    /// change this item's own scale. (Previously a live `frameInDock` from
+    /// GeometryReader was tried but created a feedback loop with magnification.)
     private var restingCenterAlongAxis: CGFloat {
-        leadingPad + CGFloat(index) * (iconSize + spacing) + iconSize / 2
+        if let c = restingCenters[item.id] {
+            return c
+        }
+        return leadingPad + CGFloat(index) * (iconSize + spacing) + iconSize / 2
     }
 
     private var magnificationScale: CGFloat {
@@ -935,6 +1506,30 @@ struct DockItemView: View {
         return 1 + (maxScale - 1) * g
     }
 
+    /// Alignment for positioning the transient "Empty" pill relative to this
+    /// item's icon cell, pointing into the inward magnification headroom.
+    private var pillAlignment: Alignment {
+        switch prefs.edge {
+        case .bottom: return .top
+        case .top: return .bottom
+        case .left: return .trailing
+        case .right: return .leading
+        }
+    }
+
+    /// Offset to push the pill out of the icon cell and into the inward
+    /// headroom for the current dock edge. Keeps pill from overlapping the icon.
+    private var pillOffset: CGSize {
+        let gap: CGFloat = 6
+        let pillExtent: CGFloat = 16
+        switch prefs.edge {
+        case .bottom: return CGSize(width: 0, height: -(pillExtent + gap))
+        case .top: return CGSize(width: 0, height: (pillExtent + gap))
+        case .left: return CGSize(width: (pillExtent + gap), height: 0)
+        case .right: return CGSize(width: -(pillExtent + gap), height: 0)
+        }
+    }
+
     var body: some View {
         let isDragging = dragState.draggingID == item.id
         let isHoverTarget = dragState.hoverTargetID == item.id
@@ -944,10 +1539,11 @@ struct DockItemView: View {
         // so neighbors close the gap — matches native Dock drag-off behavior.
         let isDetached = isDragging && dragState.draggedOutside && !DockView.isReservedID(item.id)
 
-        VStack(spacing: 4) {
-            if prefs.labelMode == .above {
-                labelText
-            }
+        // Icon cell is the primary laid-out item (normalized height/width across all slot types).
+        // Labels and indicators are attached as overlays so they do not shift the icon's center
+        // within the dock bar. This guarantees all icons (pinned, running, minimized) are
+        // perfectly vertically and horizontally centered inside the visual dock chrome.
+        ZStack {
             ZStack {
                 // Folder formation halo
                 if isHoverTarget && !isDragging {
@@ -967,7 +1563,7 @@ struct DockItemView: View {
                 let cellH = isDetached ? 0 : (isVertical ? max(iconSize, displaySize) : iconSize)
                 Color.clear
                     .frame(width: cellW, height: cellH)
-                    .overlay(alignment: isVertical ? .leading : .bottom) {
+                    .overlay(alignment: .center) {
                         iconContent(size: displaySize)
                             .opacity(isDetached ? 0 : (isDragging ? 0.85 : 1.0))
                             // Badge rides the actual displayed icon's top-right
@@ -987,37 +1583,61 @@ struct DockItemView: View {
                         badgeOverlay(displaySize: iconSize * scale)
                     }
             }
-            .background(
-                GeometryReader { proxy -> Color in
-                    let f = proxy.frame(in: .named("dock"))
-                    DispatchQueue.main.async {
-                        self.frameInDock = f
-                        ItemFrameRegistry.shared.frames[item.id] = f
-                    }
-                    return Color.clear
+            .overlay(alignment: pillAlignment) {
+                if DockView.isTrash(item) {
+                    EmptyTrashPill(action: {
+                        AppLibrary.shared.emptyTrashDirectly()
+                        withAnimation(.spring(response: 0.2, dampingFraction: 0.8)) {
+                            showEmptyPill = false
+                        }
+                    })
+                    .scaleEffect(showEmptyPill ? 1.0 : 0.55)
+                    .opacity(showEmptyPill ? 1.0 : 0.0)
+                    .offset(pillOffset)
+                    .allowsHitTesting(showEmptyPill)
+                    .animation(.spring(response: 0.28, dampingFraction: 0.76), value: showEmptyPill)
                 }
-            )
+            }
+            .trackItemFrame(id: item.id)
             // iOS-style wiggle when in edit mode
             .modifier(WiggleModifier(active: dragState.wiggle && !isDragging))
             .offset(isDragging ? dragState.dragOffset : .zero)
 
+            // Labels and indicators are overlays relative to the icon cell so they
+            // never affect the vertical/horizontal centering of the icon square itself.
+            if prefs.labelMode == .above {
+                labelText
+                    .offset(y: -(iconSize / 2 + 14))
+            }
             if prefs.labelMode == .below {
                 labelText
+                    .offset(y: iconSize / 2 + 10)
             }
-            // Running-app indicator dot — only for classic "dot" style (shows under any running pinned item).
-            // For "glow" style the active (frontmost) item instead receives a soft halo via .activeGlow on the icon itself.
-            if prefs.indicatorStyle == .dot && isAppRunning {
-                Circle()
-                    .fill(Color.primary.opacity(0.6))
-                    .frame(width: 4, height: 4)
+            if prefs.indicatorStyle == .dot {
+                if isActive {
+                    RoundedRectangle(cornerRadius: 1, style: .continuous)
+                        .fill(Color(nsColor: NSColor.controlAccentColor).opacity(0.85))
+                        .frame(width: 14, height: 2)
+                        .offset(y: iconSize / 2 + 4)
+                } else if isRunning {
+                    Circle()
+                        .fill(Color.primary.opacity(0.6))
+                        .frame(width: 4, height: 4)
+                        .offset(y: iconSize / 2 + 4)
+                }
             }
         }
+        .frame(width: isVertical ? iconSize : nil, height: isVertical ? nil : iconSize, alignment: .center)
         .coordinateSpace(name: "item-\(item.id)")
         .gesture(
             DragGesture(coordinateSpace: .named("dock"))
                 .onChanged { value in
                     if dragState.draggingID != item.id {
                         dragState.draggingID = item.id
+                        // Starting a drag on any item should dismiss any open folder popover
+                        // (matches the "automatic dismissal on drag" behavior).
+                        NotificationCenter.default.post(name: Notification.Name("FocusDock.CloseAllFolderPopovers"), object: nil)
+                        NotificationCenter.default.post(name: Notification.Name("FocusDock.DismissTransientPills"), object: nil)
                     }
                     dragState.dragOffset = CGSize(
                         width: value.translation.width,
@@ -1029,15 +1649,39 @@ struct DockItemView: View {
                     finishDrag(at: value.location)
                 }
         )
+        // Ctrl-click (or right-click simulation) on Trash shows the compact liquid-glass
+        // "Empty" pill above the icon in the inward headroom (primary quick action).
+        // The regular context menu remains available as a secondary method.
+        .simultaneousGesture(
+            TapGesture()
+                .modifiers(.control)
+                .onEnded { _ in
+                    if DockView.isTrash(item) {
+                        withAnimation(.spring(response: 0.25, dampingFraction: 0.78)) {
+                            showEmptyPill = true
+                        }
+                    }
+                }
+        )
         .onTapGesture {
+            // Any tap on any dock item dismisses transient pills (e.g. trash Empty pill)
+            NotificationCenter.default.post(name: Notification.Name("FocusDock.DismissTransientPills"), object: nil)
             if dragState.wiggle {
                 // Exit edit mode on tap in empty-ish area; for now, tapping launches
             }
-            // Ensure any open folder popover is closed when interacting with dock items (click-outside behavior for other icons).
-            NotificationCenter.default.post(name: Notification.Name("FocusDock.CloseAllFolderPopovers"), object: nil)
             switch item {
-            case .app(let a): library.launch(a)
-            case .folder: showFolderPopover.toggle()
+            case .app(let a):
+                // Tapping a regular app: close any open folder popovers (click-outside for other icons)
+                NotificationCenter.default.post(name: Notification.Name("FocusDock.CloseAllFolderPopovers"), object: nil)
+                library.launch(a)
+            case .folder(let f):
+                // Tapping a folder: post *with this folder's ID as object* so that THIS view's onReceive
+                // will ignore the force-close (letting our toggle() decide open vs close), while any
+                // OTHER folder's onReceive will still see a non-matching ID and close itself.
+                // This fixes the regression where the global close was firing synchronously on the
+                // same tap, forcing false then toggle true (causing flash or no-op).
+                NotificationCenter.default.post(name: Notification.Name("FocusDock.CloseAllFolderPopovers"), object: f.id)
+                showFolderPopover.toggle()
             }
         }
         .popover(isPresented: $showFolderPopover, arrowEdge: .top) {
@@ -1049,17 +1693,27 @@ struct DockItemView: View {
         }
         // Listen for global close requests (posted on any dock item tap or background) so that
         // tapping elsewhere in the dock automatically dismisses an open folder popover ("click outside").
-        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("FocusDock.CloseAllFolderPopovers"))) { _ in
+        // When the notification's object matches *this* folder item's ID, it means the tap originated
+        // on this folder itself; we skip the force-close so the .toggle() in onTapGesture can open
+        // or close it cleanly. All other listeners (other folders or when object==nil) will close.
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("FocusDock.CloseAllFolderPopovers"))) { note in
+            if let senderFolderID = note.object as? UUID,
+               case .folder(let myFolder) = item,
+               senderFolderID == myFolder.id {
+                // Ignore: this folder's own tap will handle toggle()
+                return
+            }
             showFolderPopover = false
+        }
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("FocusDock.DismissTransientPills"))) { _ in
+            if showEmptyPill {
+                showEmptyPill = false
+            }
         }
         .contextMenu {
             if DockView.isTrash(item) {
                 Button {
-                    let script = "tell application \"Finder\" to empty the trash"
-                    if let appleScript = NSAppleScript(source: script) {
-                        _ = appleScript.executeAndReturnError(nil)
-                        AppLibrary.shared.trashIsEmpty = true
-                    }
+                    AppLibrary.shared.emptyTrashDirectly()
                 } label: {
                     Label("Empty Trash", systemImage: "trash")
                 }
@@ -1074,10 +1728,10 @@ struct DockItemView: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: size, height: size)
-                .activeGlow(isActive: isActive, style: prefs.indicatorStyle)
+                .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
         case .folder(let f):
             FolderIconView(folder: f, size: size)
-                .activeGlow(isActive: isActive, style: prefs.indicatorStyle)
+                .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
         }
     }
 
@@ -1109,24 +1763,31 @@ struct DockItemView: View {
         }
     }
 
-    private var isAppRunning: Bool {
-        guard case .app(let a) = item else { return false }
-        let url = URL(fileURLWithPath: a.path).resolvingSymlinksInPath()
-        return NSWorkspace.shared.runningApplications.contains { app in
-            guard let bundleURL = app.bundleURL?.resolvingSymlinksInPath() else { return false }
-            return bundleURL == url
+    /// Centralized running/frontmost state for this DockItem (app or folder).
+    /// Delegates to RunningAppsMonitor so that pinned-app launch/quit events
+    /// (which now publish runningAppPaths) correctly trigger re-renders and
+    /// differentiated subtle/strong indicators.
+    private var runningState: AppRunningState {
+        switch item {
+        case .app(let a):
+            return runningMonitor.runningState(for: a.path)
+        case .folder(let f):
+            return runningMonitor.runningState(for: f)
         }
     }
 
-    /// True when this item (app or folder containing the app) is the frontmost application.
-    /// Used exclusively for the "glow" indicator style on the active item.
+    /// True when the item (or any app inside a folder) has at least one running process.
+    /// Used for the classic dot (or underline for frontmost) in .dot indicatorStyle,
+    /// and to decide whether to render subtle glow in .glow style.
+    private var isRunning: Bool {
+        runningState.isRunning
+    }
+
+    /// True when this item (app or folder containing the frontmost app) is the
+    /// currently frontmost application. Drives the stronger/brighter glow or
+    /// underline bar.
     private var isActive: Bool {
-        switch item {
-        case .app(let a):
-            return runningMonitor.isAppActive(a.path)
-        case .folder(let f):
-            return runningMonitor.isFolderActive(f)
-        }
+        runningState.isFrontmost
     }
 
     private var labelText: some View {
@@ -1378,25 +2039,28 @@ struct FolderPopover: View {
     }
 
     private let cellSize: CGFloat = 56
-    private let cellSpacing: CGFloat = 14
 
     var body: some View {
-        let cols = Array(repeating: GridItem(.fixed(cellSize + 16), spacing: cellSpacing), count: resolvedColumns)
+        // Use user's Spacing setting for gaps between icons (both columns and rows) so
+        // folder popovers feel consistent with the main dock instead of oversized gaps.
+        let spacing = CGFloat(prefs.effectiveSpacing)
+        let cols = Array(repeating: GridItem(.fixed(cellSize), spacing: spacing), count: resolvedColumns)
 
         VStack(alignment: .leading, spacing: 10) {
             header
-            LazyVGrid(columns: cols, alignment: .leading, spacing: cellSpacing) {
+            LazyVGrid(columns: cols, alignment: .leading, spacing: spacing) {
                 ForEach(folder.apps) { app in
                     folderAppCell(app)
                 }
             }
         }
-        // Use the same effective (scaled) padding values as the main dock for internal spacing consistency (replaces previous hardcoded 16).
+        // Use the same effective (scaled) padding values as the main dock for internal spacing consistency.
+        // Popover now dynamically sizes to content (grid + header) + these paddings; no more
+        // hardcoded +16 extras that caused large/uneven L/R padding or prevented nice shrinking for small folders.
         .padding(.top, prefs.effectivePaddingTop)
         .padding(.bottom, prefs.effectivePaddingBottom)
         .padding(.leading, prefs.effectivePaddingLeft)
         .padding(.trailing, prefs.effectivePaddingRight)
-        .frame(width: CGFloat(resolvedColumns) * (cellSize + 16) + CGFloat(max(0, resolvedColumns - 1)) * cellSpacing + (prefs.effectivePaddingLeft + prefs.effectivePaddingRight) + 16)
     }
 
     private var header: some View {
@@ -1432,22 +2096,24 @@ struct FolderPopover: View {
             if prefs.labelMode == .above {
                 cellLabel(app)
             }
+            let st = runningMonitor.runningState(for: app.path)
             Image(nsImage: app.icon).resizable().interpolation(.high)
                 .frame(width: cellSize, height: cellSize)
-                .activeGlow(isActive: runningMonitor.isAppActive(app.path), style: prefs.indicatorStyle)
+                .activeGlow(isRunning: st.isRunning, isFrontmost: st.isFrontmost, style: prefs.indicatorStyle)
                 .nativeToolTip(prefs.labelMode == .tooltip ? app.name : "")
             if prefs.labelMode == .below {
                 cellLabel(app)
             }
         }
-        .frame(width: cellSize + 16)
+        .frame(width: cellSize)
         .contentShape(Rectangle())
         .onTapGesture { library.launch(app) }
     }
 
     private func cellLabel(_ app: AppEntry) -> some View {
         Text(app.name).font(.system(size: 10)).lineLimit(1)
-            .frame(maxWidth: cellSize + 16)
+            .frame(maxWidth: cellSize, alignment: .center)
+            .multilineTextAlignment(.center)
     }
 }
 
@@ -1500,19 +2166,40 @@ struct AttentionDot: View {
     }
 }
 
-/// ViewModifier that renders a premium soft glow (layered shadows) around an
-/// icon when it represents the frontmost active application (for indicatorStyle == .glow).
-/// Applied to both main dock icons (including folders) and cells inside folder popovers.
+/// ViewModifier that renders differentiated glows for the indicatorStyle == .glow case:
+/// - Subtle glow for any running app (or folder containing running apps) that is NOT frontmost.
+/// - Stronger, brighter, more prominent glow (larger radius, higher opacity, accent emphasis)
+///   for the single frontmost / focused app (or folder containing the frontmost app).
+/// Also used inside FolderPopover cells so each app icon inside an open folder
+/// receives the appropriate subtle or strong treatment.
+/// When style != .glow the modifier is a no-op (classic dots/underline handled separately).
 struct ActiveGlowModifier: ViewModifier {
-    let isActive: Bool
+    let isRunning: Bool
+    let isFrontmost: Bool
     let style: Preferences.IndicatorStyle
 
     func body(content: Content) -> some View {
-        if style == .glow && isActive {
-            content
-                .shadow(color: Color.accentColor.opacity(0.42), radius: 3, x: 0, y: 0)
-                .shadow(color: Color.white.opacity(0.68), radius: 7, x: 0, y: 0)
-                .shadow(color: Color.accentColor.opacity(0.22), radius: 15, x: 0, y: 0)
+        if style == .glow && (isRunning || isFrontmost) {
+            // Use the live macOS system accent color (user's chosen highlight in
+            // System Settings > Appearance) so the glow respects the theme exactly.
+            // We use NSColor.controlAccentColor (dynamic) wrapped in Color(nsColor:)
+            // and rely on Preferences' systemColorsDidChangeNotification observer
+            // to bump _tick and force re-render of all dock items when the user
+            // changes the accent color at runtime.
+            let accent = Color(nsColor: NSColor.controlAccentColor)
+            if isFrontmost {
+                // Strong, prominent glow for the focused/frontmost item.
+                // Layered shadows for a rich premium halo using accent + white highlights.
+                content
+                    .shadow(color: accent.opacity(0.58), radius: 5, x: 0, y: 0)
+                    .shadow(color: Color.white.opacity(0.78), radius: 9, x: 0, y: 0)
+                    .shadow(color: accent.opacity(0.32), radius: 18, x: 0, y: 0)
+            } else {
+                // Subtle, tasteful glow for any other running (but not focused) app/folder.
+                content
+                    .shadow(color: accent.opacity(0.26), radius: 5, x: 0, y: 0)
+                    .shadow(color: Color.white.opacity(0.32), radius: 7, x: 0, y: 0)
+            }
         } else {
             content
         }
@@ -1520,8 +2207,8 @@ struct ActiveGlowModifier: ViewModifier {
 }
 
 extension View {
-    func activeGlow(isActive: Bool, style: Preferences.IndicatorStyle) -> some View {
-        self.modifier(ActiveGlowModifier(isActive: isActive, style: style))
+    func activeGlow(isRunning: Bool, isFrontmost: Bool, style: Preferences.IndicatorStyle) -> some View {
+        self.modifier(ActiveGlowModifier(isRunning: isRunning, isFrontmost: isFrontmost, style: style))
     }
 }
 
@@ -1540,79 +2227,279 @@ private struct FrameTracker: ViewModifier {
     }
 }
 
-// MARK: - Dock Tooltip Panel
+// MARK: - Dock Tooltip Panel (Liquid Glass Callout)
 
-/// Floating panel that renders a label bubble outside the dock window — the
-/// dock's own NSPanel is sized to icon thickness, so a SwiftUI tooltip drawn
-/// inside it would be clipped. A separate borderless panel positioned along
-/// the outer edge of the dock matches the native macOS Dock's hover-label.
+// Premium liquid-glass hover tooltip with integrated callout arrow.
+// Uses NSHostingView + SwiftUI for modern rendering, .hudWindow blur clipped
+// to a callout shape (rounded rect + arrow), subtle glass border, depth shadow,
+// and spring scale+fade transitions. Positioned precisely above (or beside) the
+// icon with the arrow pointing at its center. Respects all four dock edges.
+
+enum TooltipPointDirection {
+    case up, down, left, right
+
+    var isHorizontal: Bool { self == .left || self == .right }
+}
+
+final class TooltipModel: ObservableObject {
+    @Published var text: String = ""
+    @Published var direction: TooltipPointDirection = .down
+    @Published var isShowing: Bool = false
+}
+
+struct ArrowTriangle: Shape {
+    var direction: TooltipPointDirection
+
+    func path(in rect: CGRect) -> Path {
+        var path = Path()
+        let w = rect.width
+        let h = rect.height
+        switch direction {
+        case .down:
+            path.move(to: CGPoint(x: 0, y: 0))
+            path.addLine(to: CGPoint(x: w, y: 0))
+            path.addLine(to: CGPoint(x: w / 2, y: h))
+            path.closeSubpath()
+        case .up:
+            path.move(to: CGPoint(x: 0, y: h))
+            path.addLine(to: CGPoint(x: w, y: h))
+            path.addLine(to: CGPoint(x: w / 2, y: 0))
+            path.closeSubpath()
+        case .left:
+            path.move(to: CGPoint(x: w, y: 0))
+            path.addLine(to: CGPoint(x: w, y: h))
+            path.addLine(to: CGPoint(x: 0, y: h / 2))
+            path.closeSubpath()
+        case .right:
+            path.move(to: CGPoint(x: 0, y: 0))
+            path.addLine(to: CGPoint(x: 0, y: h))
+            path.addLine(to: CGPoint(x: w, y: h / 2))
+            path.closeSubpath()
+        }
+        return path
+    }
+}
+
+struct LiquidGlassTooltip: View {
+    @ObservedObject var model: TooltipModel
+
+    private let cornerRadius: CGFloat = 13
+    private let arrowBase: CGFloat = 12
+    private let arrowHeight: CGFloat = 7
+    private let overlap: CGFloat = 2.5  // slightly more overlap for seamless merge at tighter gap
+    private let hPadding: CGFloat = 11
+    private let vPadding: CGFloat = 6
+
+    private var arrowAlignment: Alignment {
+        switch model.direction {
+        case .down: return .bottom
+        case .up: return .top
+        case .left: return .leading
+        case .right: return .trailing
+        }
+    }
+
+    private var arrowPadding: EdgeInsets {
+        let extra = arrowHeight - overlap
+        switch model.direction {
+        case .down: return EdgeInsets(top: 0, leading: 0, bottom: extra, trailing: 0)
+        case .up: return EdgeInsets(top: extra, leading: 0, bottom: 0, trailing: 0)
+        case .left: return EdgeInsets(top: 0, leading: extra, bottom: 0, trailing: 0)
+        case .right: return EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: extra)
+        }
+    }
+
+    private var arrowOffset: CGSize {
+        let o: CGFloat = 1.0 // tighter overlap for the arrow base at the new smaller gap (2.0)
+        switch model.direction {
+        case .down: return CGSize(width: 0, height: -o)
+        case .up: return CGSize(width: 0, height: o)
+        case .left: return CGSize(width: -o, height: 0)
+        case .right: return CGSize(width: o, height: 0)
+        }
+    }
+
+    var body: some View {
+        let textView = Text(model.text)
+            .font(.system(size: 12, weight: .medium))
+            .foregroundStyle(Color.primary)
+            .shadow(color: .black.opacity(0.38), radius: 0.6, x: 0, y: 0.4)
+            .multilineTextAlignment(.center)
+            .lineLimit(2)
+            .fixedSize(horizontal: true, vertical: false)
+            .padding(.horizontal, hPadding)
+            .padding(.vertical, vPadding)
+
+        textView
+            .background(bubbleBackground)
+            .overlay(arrowOverlay, alignment: arrowAlignment)
+            .padding(arrowPadding)
+            .scaleEffect(model.isShowing ? 1.0 : 0.92)
+            .opacity(model.isShowing ? 1.0 : 0.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.82), value: model.isShowing)
+    }
+
+    private var bubbleBackground: some View {
+        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
+        return shape
+            .fill(Color.clear)
+            .background(
+                VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+                    .clipShape(shape)
+            )
+            .overlay(
+                shape
+                    .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.8)
+            )
+            .shadow(color: .black.opacity(0.28), radius: 10, x: 0, y: 4)
+    }
+
+    private var arrowOverlay: some View {
+        let tri = ArrowTriangle(direction: model.direction)
+        let sz = model.direction.isHorizontal
+            ? CGSize(width: arrowHeight, height: arrowBase)
+            : CGSize(width: arrowBase, height: arrowHeight)
+        return tri
+            .fill(Color.clear)
+            .background(
+                VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+                    .clipShape(tri)
+            )
+            .overlay(tri.stroke(Color.white.opacity(0.20), lineWidth: 0.7))
+            .frame(width: sz.width, height: sz.height)
+            .offset(arrowOffset)
+    }
+}
+
 final class DockTooltipPanel {
     static let shared = DockTooltipPanel()
     static weak var dockWindow: NSWindow?
 
     private var panel: NSPanel?
-    private var label: NSTextField?
+    private var hostingView: NSHostingView<LiquidGlassTooltip>?
+    private let tooltipModel = TooltipModel()
     private var currentOwner: UUID?
+
+    private func idealSize(for text: String) -> CGSize {
+        let font = NSFont.systemFont(ofSize: 12, weight: .medium)
+        let attrs: [NSAttributedString.Key: Any] = [.font: font]
+        let ns = text as NSString
+        let bounds = ns.boundingRect(
+            with: NSSize(width: 900, height: 200),
+            options: [.usesLineFragmentOrigin, .usesFontLeading],
+            attributes: attrs,
+            context: nil
+        )
+        let w = ceil(bounds.width) + hPadding * 2
+        let h = ceil(bounds.height) + vPadding * 2
+        return CGSize(width: max(40, w), height: max(22, h))
+    }
+
+    private let hPadding: CGFloat = 11
+    private let vPadding: CGFloat = 6
 
     func show(text: String, near id: UUID, edge: Preferences.Edge) {
         guard !text.isEmpty,
               let dockWin = Self.dockWindow,
               let itemFrame = ItemFrameRegistry.shared.frames[id] else { return }
+
+        let direction: TooltipPointDirection = {
+            switch edge {
+            case .bottom: return .down
+            case .top: return .up
+            case .left: return .left
+            case .right: return .right
+            }
+        }()
+
         ensurePanel()
-        guard let panel = panel, let label = label else { return }
+        guard let panel = panel else { return }
 
-        label.stringValue = text
-        label.sizeToFit()
-        let padH: CGFloat = 10
-        let padV: CGFloat = 5
-        let w = ceil(label.frame.width) + padH * 2
-        let h = ceil(label.frame.height) + padV * 2
-
-        let dockFrame = dockWin.frame
-        let contentHeight = dockWin.contentView?.bounds.height ?? dockFrame.height
-        let itemCenterScreenX = dockFrame.minX + itemFrame.midX
-        let itemCenterScreenY = dockFrame.minY + (contentHeight - itemFrame.midY)
-        let gap: CGFloat = 8
-
-        let x: CGFloat
-        let y: CGFloat
-        switch edge {
-        case .bottom:
-            x = itemCenterScreenX - w / 2
-            y = dockFrame.maxY + gap
-        case .top:
-            x = itemCenterScreenX - w / 2
-            y = dockFrame.minY - gap - h
-        case .left:
-            x = dockFrame.maxX + gap
-            y = itemCenterScreenY - h / 2
-        case .right:
-            x = dockFrame.minX - gap - w
-            y = itemCenterScreenY - h / 2
+        let body = idealSize(for: text)
+        let arrowH: CGFloat = 7
+        let ov: CGFloat = 2.0
+        let total: CGSize
+        switch direction {
+        case .down, .up:
+            total = CGSize(width: body.width, height: body.height + arrowH - ov)
+        case .left, .right:
+            total = CGSize(width: body.width + arrowH - ov, height: body.height)
         }
 
-        let frame = NSRect(x: x, y: y, width: w, height: h)
-        panel.setFrame(frame, display: true)
-        label.frame = NSRect(x: padH, y: padV, width: w - 2 * padH, height: h - 2 * padV)
+        let dockF = dockWin.frame
+        let ch = dockWin.contentView?.bounds.height ?? dockF.height
+        let contentTopScreenY = dockF.minY + ch
+        let contentLeftScreenX = dockF.minX
+        let icX = contentLeftScreenX + itemFrame.midX
+        let icY = contentTopScreenY - itemFrame.midY
+        let gap: CGFloat = 2.0  // tighter clearance so the ground pointer (arrow) sits "stuck" to the icon top without overlap or excessive offset
+
+        let pw = total.width
+        let ph = total.height
+        let px: CGFloat
+        let py: CGFloat
+        switch direction {
+        case .down:
+            // Anchor to the icon's actual top edge (inward for bottom dock) using its tracked frame.
+            // This ensures the liquid-glass pointer/tooltip always has proper clearance above the
+            // icon graphic itself (including for folders when their popover is open and for all
+            // label modes / paddings), rather than assuming the icon is flush against the dock
+            // window's outer edge.
+            let iconTopScreenY = contentTopScreenY - itemFrame.minY
+            let tipY = iconTopScreenY + gap
+            px = icX - pw / 2
+            py = tipY
+        case .up:
+            let iconBottomScreenY = contentTopScreenY - itemFrame.maxY
+            let tipY = iconBottomScreenY - gap
+            px = icX - pw / 2
+            py = tipY - ph
+        case .left:
+            let iconRightScreenX = contentLeftScreenX + itemFrame.maxX
+            let tipX = iconRightScreenX + gap
+            px = tipX
+            py = icY - ph / 2
+        case .right:
+            let iconLeftScreenX = contentLeftScreenX + itemFrame.minX
+            let tipX = iconLeftScreenX - gap
+            px = tipX - pw
+            py = icY - ph / 2
+        }
+
+        panel.setFrame(NSRect(x: px, y: py, width: pw, height: ph), display: true)
+
+        tooltipModel.text = text
+        tooltipModel.direction = direction
         currentOwner = id
-        if !panel.isVisible { panel.orderFront(nil) }
+
+        if !panel.isVisible {
+            tooltipModel.isShowing = false
+            panel.orderFront(nil)
+            DispatchQueue.main.async {
+                self.tooltipModel.isShowing = true
+            }
+        }
     }
 
     func hideIfOwner(_ id: UUID) {
         guard currentOwner == id else { return }
-        currentOwner = nil
-        panel?.orderOut(nil)
+        hideAll()
     }
 
     func hideAll() {
         currentOwner = nil
-        panel?.orderOut(nil)
+        guard let p = panel else { return }
+        tooltipModel.isShowing = false
+        DispatchQueue.main.asyncAfter(deadline: .now() + 0.28) { [weak self] in
+            guard let self = self, !self.tooltipModel.isShowing else { return }
+            p.orderOut(nil)
+        }
     }
 
     private func ensurePanel() {
         if panel != nil { return }
         let p = NSPanel(
-            contentRect: NSRect(x: 0, y: 0, width: 100, height: 24),
+            contentRect: NSRect(x: 0, y: 0, width: 120, height: 32),
             styleMask: [.borderless, .nonactivatingPanel],
             backing: .buffered,
             defer: false
@@ -1621,34 +2508,19 @@ final class DockTooltipPanel {
         p.level = .statusBar
         p.backgroundColor = .clear
         p.isOpaque = false
-        p.hasShadow = true
+        p.hasShadow = false
         p.hidesOnDeactivate = false
         p.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary, .ignoresCycle]
         p.ignoresMouseEvents = true
 
-        let blur = NSVisualEffectView(frame: p.contentView!.bounds)
-        blur.material = .toolTip
-        blur.blendingMode = .behindWindow
-        blur.state = .active
-        blur.wantsLayer = true
-        blur.layer?.cornerRadius = 6
-        blur.layer?.borderWidth = 0.5
-        blur.layer?.borderColor = NSColor.separatorColor.withAlphaComponent(0.6).cgColor
-        blur.layer?.masksToBounds = true
-        blur.autoresizingMask = [.width, .height]
+        let host = NSHostingView(rootView: LiquidGlassTooltip(model: tooltipModel))
+        host.autoresizingMask = [.width, .height]
+        host.wantsLayer = true
+        host.layer?.backgroundColor = NSColor.clear.cgColor
 
-        let lbl = NSTextField(labelWithString: "")
-        lbl.font = .systemFont(ofSize: 12, weight: .regular)
-        lbl.textColor = .labelColor
-        lbl.backgroundColor = .clear
-        lbl.isBordered = false
-        lbl.isEditable = false
-        lbl.alignment = .center
-        blur.addSubview(lbl)
-
-        p.contentView = blur
+        p.contentView = host
         panel = p
-        label = lbl
+        hostingView = host
     }
 }
 
