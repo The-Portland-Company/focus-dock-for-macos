@@ -76,10 +76,8 @@ enum ProfileKeys {
         "showBorder", "borderColor", "borderWidth",
         "edgeOffset", "showFinder", "showTrash",
         "autoHideDock", "bounceOnLaunch",
-        "showRunningIndicators", "showRecentApps",
-        "openAppVisualStyle",
-        "fillWidth", "paddingUniform", "dockScale",
-        "isPlaced"
+        "showRunningIndicators", "indicatorStyle", "showRecentApps",
+        "fillWidth", "paddingUniform", "dockScale"
     ]
     static func isPerProfile(_ key: String) -> Bool { perProfile.contains(key) }
 }
@@ -227,14 +225,8 @@ final class ProfileManager: ObservableObject {
         Self.saveCodable(docks, key: kDocks, defaults: defaults)
         ensureDockDir(newDock.id)
 
-        if let src = sourceID {
-            copyDockData(from: src, to: newDock.id)
-        } else {
-            seedDockDefaults(newDock.id)
-            // Brand new dock (not a duplicate) starts unplaced so it appears
-            // floating in the center with a clear "drag to edge" instruction.
-            defaults.set(false, forKey: nsKey("isPlaced", for: newDock.id))
-        }
+        if let src = sourceID { copyDockData(from: src, to: newDock.id) }
+        else { seedDockDefaults(newDock.id) }
 
         // Attach to the requested profile (or the active one).
         let targetProfile = profileID ?? activeProfileID

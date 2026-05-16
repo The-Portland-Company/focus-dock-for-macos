@@ -71,10 +71,6 @@ final class RunningAppsMonitor: ObservableObject {
         let pinnedPaths = pinnedAppPaths()
         var result: [RunningAppEntry] = []
         var seenPaths = Set<String>()
-
-        let frontmost = NSWorkspace.shared.frontmostApplication
-        self.frontmostPath = frontmost?.bundleURL?.resolvingSymlinksInPath().path
-
         for app in NSWorkspace.shared.runningApplications {
             guard app.activationPolicy == .regular,
                   app.processIdentifier > 0,

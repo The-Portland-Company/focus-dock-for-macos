@@ -37,7 +37,6 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var runningAppsSubscription: Any?
     private var snapWorkItem: DispatchWorkItem?
     private var cancellables: Set<AnyCancellable> = []
-    private var escapeMonitor: Any?
 
     // Auto-hide state. `shownFrame` is the laid-out frame as if the dock were
     // visible; the window itself may be parked at `hiddenFrame(for:)` instead.
@@ -77,7 +76,6 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let content = DockView()
             .environmentObject(library)
             .environmentObject(prefs)
-            .environment(\.dockID, dockID)
         let host = DockHostingController(rootView: content)
 
         let win = NSPanel(
@@ -102,10 +100,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         // own per-dock prefs, so other docks' edits don't actually move us).
         prefsObserver = NotificationCenter.default.addObserver(
             forName: Preferences.changed, object: nil, queue: .main
-        ) { [weak self] _ in
-            self?.applyLayout()
-            self?.updateEscapeMonitor()
-        }
+        ) { [weak self] _ in self?.applyLayout() }
         // Re-layout when our own items change (other dock instances' changes
         // are filtered out by dockID match in AppLibrary itself).
         library.objectWillChange.sink { [weak self] _ in
@@ -119,21 +114,6 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.applyLayout() }
-
-        // For freshly created unplaced ("New Dock") windows, force them in front
-        // of the Settings window so the user immediately sees the header + X
-        // and knows they have a draggable floating bar to place.
-        if !prefs.isPlaced {
-            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
-                guard let w = self?.window else { return }
-                w.orderFrontRegardless()
-                w.makeKey()
-                NSApp.activate(ignoringOtherApps: true)
-            }
-        }
-
-        updateEscapeMonitor()
-
         // Re-run layout when the minimized-window list changes so the dock
         // grows/shrinks to accommodate new tiles.
         minimizedSubscription = MinimizedMonitor.shared.$windows.sink { [weak self] _ in
@@ -156,44 +136,16 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     /// Compute the proper window size and origin for the configured edge.
     func applyLayout() {
         guard let win = window, let screen = activeScreen else { return }
-
-        // --- Unplaced / "New Dock" floating preview state ---
-        if !prefs.isPlaced {
-            win.isMovableByWindowBackground = true
-            win.isMovable = true
-
-            let previewW: CGFloat = max(520, min(680, screen.frame.width * 0.42))
-            let previewH: CGFloat = 105
-            let x = screen.frame.midX - previewW / 2
-            let y = screen.frame.midY - previewH / 2 + 30
-            let floating = NSRect(x: x, y: y, width: previewW, height: previewH)
-
-            shownFrame = floating
-            win.setFrame(floating, display: true, animate: false)
-            return
-        }
-
         let edge = self.prefs.edge
         let isEditing = self.prefs.isEditingLayout
         win.isMovableByWindowBackground = isEditing
         win.isMovable = isEditing
 
         let prefs = self.prefs
+        // Flush works on any edge now — uses full screen.frame and ignores
+        // edgeOffset on that edge. (Pref key kept as "flushBottom" for storage.)
         let useFlush = prefs.flushBottom
         let area: NSRect = useFlush ? screen.frame : screen.visibleFrame
-
-        // If the user dismissed the "New Dock" prompt with X (without dragging
-        // to an edge), keep the current centered position.
-        let currentCenter = CGPoint(x: win.frame.midX, y: win.frame.midY)
-        let dBottom = abs(currentCenter.y - area.minY)
-        let dTop    = abs(area.maxY - currentCenter.y)
-        let dLeft   = abs(currentCenter.x - area.minX)
-        let dRight  = abs(area.maxX - currentCenter.x)
-        if min(dBottom, dTop, dLeft, dRight) > 100 {
-            shownFrame = win.frame
-            win.setFrame(win.frame, display: true, animate: false)
-            return
-        }
 
         let pt = CGFloat(prefs.effectivePaddingTop), pb = CGFloat(prefs.effectivePaddingBottom)
         let pl = CGFloat(prefs.effectivePaddingLeft), pr = CGFloat(prefs.effectivePaddingRight)
@@ -207,16 +159,18 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let iconSize = CGFloat(prefs.effectiveIconSize)
         let spacing = CGFloat(prefs.effectiveSpacing)
         let isVerticalEdge = (edge == .left || edge == .right)
-        let perpInside = CGFloat(isVerticalEdge ? prefs.effectivePaddingLeft + prefs.effectivePaddingRight : prefs.effectivePaddingTop + prefs.effectivePaddingBottom)
-        let alongPaddingSum: CGFloat = isVerticalEdge
-            ? CGFloat(prefs.effectivePaddingTop + prefs.effectivePaddingBottom)
-            : CGFloat(prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
+        let perpInside = CGFloat(isVerticalEdge ? prefs.effectivePaddingLeft + prefs.effectivePaddingRight : prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
+        let perpAlongAxis = CGFloat(isVerticalEdge ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
         let totalIcons = CGFloat(count) * iconSize + CGFloat(max(0, count - 1)) * spacing
 
         // The icons may be compressed to fit; the *effective* icon size is what
         // actually appears on screen. Dock thickness is derived from the effective
         // size so the slider value doesn't grow the dock past what's visible.
-        let maxAlong = (isVerticalEdge ? area.height : area.width) - alongPaddingSum
+        let maxAlong: CGFloat
+        switch edge {
+        case .bottom, .top: maxAlong = area.width - 16 - perpAlongAxis
+        case .left, .right: maxAlong = area.height - 16 - perpAlongAxis
+        }
         let desiredAlong = totalIcons
         let alongScale: CGFloat = desiredAlong <= maxAlong ? 1 : max(0.4, maxAlong / desiredAlong)
         let effectiveIcon = iconSize * alongScale
@@ -227,6 +181,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let thicknessVertical = max(magnified, effectiveIcon) + pl + pr + 8
         _ = perpInside // silence unused warning if not referenced below
 
+        let screenBuffer: CGFloat = 16
         // Flush "bleed": when flush-with-edge is on we extend the window a few
         // points past the screen edge in the perpendicular axis so the dock
         // chrome (which is anchored to that edge via the SwiftUI ZStack) covers
@@ -242,30 +197,29 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         // the icon overlaps the corner and the dock visually "goes square"
         // at the hovered end.
         let alongHeadroom: CGFloat = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - effectiveIcon) : 0
-
-        // The user's Left/Right (or Top/Bottom for vertical docks) padding
-        // settings are the *only* source of side margin. No hard-coded buffer.
-        let maxLen = (isVerticalEdge ? area.height : area.width) - alongPaddingSum
-
         let frame: NSRect
         switch edge {
         case .bottom:
             let desired = totalIcons + pl + pr + alongHeadroom
+            let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let y = useFlush ? area.minY - bleed : area.minY + offset
             frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal + bleed)
         case .top:
             let desired = totalIcons + pl + pr + alongHeadroom
+            let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let y = useFlush ? area.maxY - thicknessHorizontal : area.maxY - thicknessHorizontal - offset
             frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal + bleed)
         case .left:
             let desired = totalIcons + pt + pb + alongHeadroom
+            let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let x = useFlush ? area.minX - bleed : area.minX + offset
             frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical + bleed, height: length)
         case .right:
             let desired = totalIcons + pt + pb + alongHeadroom
+            let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let x = useFlush ? area.maxX - thicknessVertical : area.maxX - thicknessVertical - offset
             frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical + bleed, height: length)
@@ -276,11 +230,6 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let shouldHide = prefs.autoHideDock && !prefs.isEditingLayout && isAutoHidden
         let target = shouldHide ? hiddenFrame(from: frame, edge: edge, on: screen) : frame
         win.setFrame(target, display: true, animate: false)
-
-        // Notify that the dock just auto-hid (so any open folder popovers can close)
-        if shouldHide {
-            NotificationCenter.default.post(name: .dockDidAutoHide, object: nil)
-        }
     }
 
     // MARK: - Auto-hide
@@ -417,38 +366,13 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
                 minDist == dTop ? .top :
                 minDist == dLeft ? .left : .right
             if newEdge != self.prefs.edge {
-                self.prefs.edge = newEdge
+                self.prefs.edge = newEdge // triggers applyLayout via observer
+            } else {
+                self.applyLayout()
             }
-            if !self.prefs.isPlaced {
-                self.prefs.isPlaced = true   // First snap "activates" the dock
-            }
-            self.applyLayout()   // always refresh after a snap in edit mode
         }
         snapWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
-    }
-
-    // MARK: - Escape key handling for Edit Layout mode
-
-    private func updateEscapeMonitor() {
-        // Remove any existing monitor
-        if let monitor = escapeMonitor {
-            NSEvent.removeMonitor(monitor)
-            escapeMonitor = nil
-        }
-
-        guard prefs.isEditingLayout else { return }
-
-        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
-            guard let self = self else { return event }
-
-            // Escape key (keyCode 53)
-            if event.keyCode == 53 {
-                Preferences.shared.isEditingLayout = false
-                return nil // consume the event
-            }
-            return event
-        }
     }
 }
 
@@ -486,14 +410,10 @@ enum DockSlot: Identifiable {
 struct DockView: View {
     @EnvironmentObject var library: AppLibrary
     @EnvironmentObject var prefs: Preferences
-    @Environment(\.dockID) private var dockID: UUID?
-    @State private var isEditingDocks = Preferences.shared.isEditingDocks
-
     @StateObject private var dragState = DragState()
     @StateObject private var minimized = MinimizedMonitor.shared
     @StateObject private var runningApps = RunningAppsMonitor.shared
     @State private var hoverPoint: CGPoint? = nil
-    @State private var smoothedHoverPoint: CGPoint? = nil  // Low-pass filtered for buttery smooth magnification
 
     private var iconSize: CGFloat { CGFloat(prefs.effectiveIconSize) }
     private var spacing: CGFloat { CGFloat(prefs.effectiveSpacing) }
@@ -638,6 +558,17 @@ struct DockView: View {
         }
     }
 
+    /// Extra left/top offset to the icon row caused by alongHeadroom (the window
+    /// is widened symmetrically for mag growth room at ends; the HStack centers
+    /// in it). Added to leadingPad so restingCenter matches actual icon centers
+    /// and hover mag peak is not biased right.
+    private var headroomExtra: CGFloat {
+        guard prefs.magnifyOnHover else { return 0 }
+        let base = CGFloat(prefs.effectiveIconSize)
+        let mag = CGFloat(prefs.effectiveMagnifySize)
+        return max(0, mag - base) / 2
+    }
+
     var body: some View {
         GeometryReader { proxy in
             let avail = isVertical ? proxy.size.height : proxy.size.width
@@ -650,15 +581,6 @@ struct DockView: View {
             let autoSpacing: CGFloat = n > 1 ? max(0, (interior - CGFloat(n) * scaledIcon) / CGFloat(n - 1)) : 0
             let scaledSpacing = prefs.fillWidth ? autoSpacing : spacing * scale
 
-            // Account for headroom-induced centering of the icon row inside the
-            // window (length includes alongHeadroom so end icons can magnify without
-            // clipping the rounded chrome). Without this, resting centers are
-            // underestimated by headroom/2, causing the mag gaussian peak to bias
-            // rightward (right neighbor appears more magnified than the hovered item).
-            let contentAlong = CGFloat(n) * scaledIcon + CGFloat(max(0, n - 1)) * scaledSpacing + (isVertical ? (CGFloat(prefs.effectivePaddingTop) + CGFloat(prefs.effectivePaddingBottom)) : (CGFloat(prefs.effectivePaddingLeft) + CGFloat(prefs.effectivePaddingRight)))
-            let extraCenter = max(0, avail - contentAlong) / 2
-            let effectiveIconLeading = (isVertical ? CGFloat(prefs.effectivePaddingTop) : CGFloat(prefs.effectivePaddingLeft)) + extraCenter
-
             ZStack(alignment: dockAlignment) {
                 // Native-Dock-style chrome sized to the resting thickness so it
                 // doesn't grow with icon magnification.
@@ -667,30 +589,6 @@ struct DockView: View {
                         width: isVertical ? restingThickness : nil,
                         height: isVertical ? nil : restingThickness
                     )
-
-                // Delete mode: big red X / trash in the top center of the dock
-                if isEditingDocks, let id = dockID {
-                    VStack {
-                        Button {
-                            // Remove this specific dock (with safety checks inside removeDock)
-                            ProfileManager.shared.removeDock(id)
-                        } label: {
-                            Image(systemName: "trash.circle.fill")
-                                .font(.system(size: 32, weight: .bold))
-                                .foregroundStyle(.white)
-                                .background(
-                                    Circle()
-                                        .fill(Color.red)
-                                        .frame(width: 38, height: 38)
-                                )
-                                .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
-                        }
-                        .buttonStyle(.plain)
-                        .help("Delete this dock")
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
-                    .padding(.top, 4)
-                }
 
                 Group {
                     if isVertical {
@@ -712,87 +610,28 @@ struct DockView: View {
                         .padding(8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: oppositeAlignment)
                 }
-
-                // Special "New / Unplaced" floating preview state.
-                // Thin header (drag handle + X) + small non-blocking instruction badge.
-                if !prefs.isPlaced {
-                    VStack(spacing: 0) {
-                        // Thin header bar — clear drag zone + X button
-                        HStack {
-                            Text("New Dock")
-                                .font(.system(size: 11, weight: .semibold, design: .rounded))
-                                .foregroundStyle(.white.opacity(0.85))
-
-                            Spacer()
-
-                            Button {
-                                prefs.isPlaced = true
-                            } label: {
-                                Image(systemName: "xmark.circle.fill")
-                                    .font(.system(size: 12, weight: .medium))
-                                    .foregroundStyle(.white)
-                            }
-                            .buttonStyle(.plain)
-                            .help("Dismiss instruction (dock stays floating)")
-                        }
-                        .padding(.horizontal, 8)
-                        .padding(.vertical, 3)
-                        .background(Color.black.opacity(0.22))
-
-                        Spacer(minLength: 6)
-
-                        // Small instruction badge (not covering the header)
-                        Text("Drag to any edge to activate")
-                            .font(.system(size: 9.5, weight: .medium, design: .rounded))
-                            .foregroundStyle(.white.opacity(0.9))
-                            .padding(.horizontal, 8)
-                            .padding(.vertical, 2)
-                            .background(Capsule().fill(Color.black.opacity(0.4)))
-                            .padding(.bottom, 6)
-                    }
-                    .frame(maxWidth: .infinity, maxHeight: .infinity)
-                    .background(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .fill(Color.black.opacity(0.08))
-                    )
-                    .overlay(
-                        RoundedRectangle(cornerRadius: 9, style: .continuous)
-                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
-                    )
-                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: dockAlignment)
         }
         .ignoresSafeArea()
-        .onReceive(NotificationCenter.default.publisher(for: Preferences.changed)) { _ in
-            isEditingDocks = Preferences.shared.isEditingDocks
-        }
         .coordinateSpace(name: "dock")
         .onContinuousHover(coordinateSpace: .named("dock")) { phase in
             switch phase {
             case .active(let p):
-                // Light exponential smoothing for buttery-smooth magnification (native-like feel)
-                let alpha: CGFloat = 0.22
-                if let current = smoothedHoverPoint {
-                    smoothedHoverPoint = CGPoint(
-                        x: current.x * (1 - alpha) + p.x * alpha,
-                        y: current.y * (1 - alpha) + p.y * alpha
-                    )
-                } else {
-                    smoothedHoverPoint = p
-                }
-
-                // Only spring on first enter for nice "pop"
+                // Animate only the enter transition (nil → point) so icons
+                // spring up to magnified size on first hover. Subsequent
+                // continuous moves bypass the animation so the magnification
+                // tracks the cursor 1:1 without spring lag.
                 if hoverPoint == nil {
-                    withAnimation(.spring(response: 0.2, dampingFraction: 0.82)) {
-                        hoverPoint = smoothedHoverPoint
+                    withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
+                        hoverPoint = p
                     }
                 } else {
-                    hoverPoint = smoothedHoverPoint
+                    hoverPoint = p
                 }
                 updateTooltipFor(point: p)
             case .ended:
-                smoothedHoverPoint = nil
+                // Animate the exit so icons spring back down smoothly.
                 withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
                     hoverPoint = nil
                 }
@@ -800,12 +639,11 @@ struct DockView: View {
             }
         }
         .environmentObject(dragState)
-        .environment(\.dockHoverPoint, smoothedHoverPoint ?? hoverPoint)
+        .environment(\.dockHoverPoint, hoverPoint)
         .environment(\.dockIsVertical, isVertical)
         .environment(\.dockMagnifyEnabled, prefs.magnifyOnHover)
         .environment(\.dockMagnifyMax, magnifyMax)
-        .environment(\.dockLeadingPad, CGFloat(isVertical ? prefs.effectivePaddingTop : prefs.effectivePaddingLeft))
-        .environment(\.dockFrontmostPath, runningApps.frontmostPath)
+        .environment(\.dockLeadingPad, CGFloat(isVertical ? prefs.effectivePaddingTop : prefs.effectivePaddingLeft) + headroomExtra)
     }
 
     /// Pick the item under the cursor (by frame in "dock" space) and show
@@ -853,9 +691,9 @@ struct DockView: View {
                     dragState: dragState
                 )
             case .runningApp(let entry):
-                RunningAppTileView(entry: entry, iconSize: iconSize, index: idx, spacing: spacing)
+                RunningAppTileView(entry: entry, iconSize: iconSize)
             case .minimized(let window):
-                MinimizedTileView(window: window, iconSize: iconSize, index: idx, spacing: spacing, isVertical: isVertical)
+                MinimizedTileView(window: window, iconSize: iconSize, isVertical: isVertical)
             case .divider, .runningDivider:
                 DockDivider(isVertical: isVertical, iconSize: iconSize)
             }
@@ -872,36 +710,11 @@ struct DockView: View {
 struct MinimizedTileView: View {
     let window: MinimizedWindow
     let iconSize: CGFloat
-    let index: Int
-    let spacing: CGFloat
     let isVertical: Bool
 
-    @Environment(\.dockHoverPoint) private var hoverPoint
-    @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
-    @Environment(\.dockMagnifyMax) private var magnifyMax
-    @Environment(\.dockLeadingPad) private var leadingPad
-
-    private var restingCenterAlongAxis: CGFloat {
-        leadingPad + CGFloat(index) * (iconSize + spacing) + iconSize / 2
-    }
-
-    private var magnificationScale: CGFloat {
-        guard magnifyEnabled, let hp = hoverPoint else { return 1 }
-        let mouse = isVertical ? hp.y : hp.x
-        let dist = abs(mouse - restingCenterAlongAxis)
-        let sigma = iconSize * 1.8
-        let g = exp(-(dist * dist) / (2 * sigma * sigma))
-        let maxScale = max(1.0, magnifyMax / iconSize)
-        return 1 + (maxScale - 1) * g * 0.9
-    }
-
     var body: some View {
-        let scale = magnificationScale
-        let displaySize = iconSize * scale
-
-        let cellW = isVertical ? iconSize : max(iconSize, displaySize)
-        let cellH = isVertical ? iconSize : max(iconSize, displaySize)
-
+        let cellW = isVertical ? iconSize : iconSize
+        let cellH = isVertical ? iconSize : iconSize
         ZStack(alignment: .bottomTrailing) {
             // Preview thumbnail (rounded), with app icon fallback.
             RoundedRectangle(cornerRadius: iconSize * 0.18, style: .continuous)
@@ -927,11 +740,12 @@ struct MinimizedTileView: View {
                     .strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5)
             )
 
-            // Small app-icon badge in the corner
+            // Small app-icon badge in the corner so the user knows which app
+            // the thumbnail belongs to — mirrors macOS Mission Control style.
             Image(nsImage: window.appIcon)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: displaySize * 0.42, height: displaySize * 0.42)
+                .frame(width: iconSize * 0.42, height: iconSize * 0.42)
                 .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
                 .offset(x: 2, y: 2)
         }
@@ -939,7 +753,6 @@ struct MinimizedTileView: View {
         .contentShape(Rectangle())
         .onTapGesture { MinimizedMonitor.shared.unminimize(window) }
         .help(window.title.isEmpty ? window.appName : window.title)
-        // Direct tracking via smoothed hoverPoint (no per-frame spring for responsiveness)
     }
 }
 
@@ -948,63 +761,31 @@ struct MinimizedTileView: View {
 struct RunningAppTileView: View {
     let entry: RunningAppEntry
     let iconSize: CGFloat
-    let index: Int
-    let spacing: CGFloat
-
     @EnvironmentObject var prefs: Preferences
-    @Environment(\.dockHoverPoint) private var hoverPoint
-    @Environment(\.dockIsVertical) private var isVertical
-    @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
-    @Environment(\.dockMagnifyMax) private var magnifyMax
-    @Environment(\.dockLeadingPad) private var leadingPad
-    @Environment(\.dockFrontmostPath) private var frontmostPath
+    @StateObject private var runningMonitor = RunningAppsMonitor.shared
 
     private var isActive: Bool {
-        entry.path == frontmostPath
-    }
-
-    private var restingCenterAlongAxis: CGFloat {
-        leadingPad + CGFloat(index) * (iconSize + spacing) + iconSize / 2
-    }
-
-    private var magnificationScale: CGFloat {
-        guard magnifyEnabled, let hp = hoverPoint else { return 1 }
-        let mouse = isVertical ? hp.y : hp.x
-        let dist = abs(mouse - restingCenterAlongAxis)
-        // Falloff tuned for secondary section (slightly softer)
-        let sigma = iconSize * 1.8
-        let g = exp(-(dist * dist) / (2 * sigma * sigma))
-        let maxScale = max(1.0, magnifyMax / iconSize)
-        return 1 + (maxScale - 1) * g * 0.85
+        runningMonitor.isAppActive(entry.path)
     }
 
     var body: some View {
-        let scale = magnificationScale
-        let displaySize = iconSize * scale
-        let style = prefs.openAppVisualStyle
-
         VStack(spacing: 4) {
             Image(nsImage: entry.icon)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: displaySize, height: displaySize)
-                .if(style == .glowAndDarken && isActive) { view in
-                    view.shadow(color: Color.accentColor.opacity(0.75), radius: 8, x: 0, y: 0)
-                }
-                .if(style == .glowAndDarken && !isActive) { view in
-                    view.opacity(0.6)
-                }
-            if prefs.showRunningIndicators && style == .dot {
+                .frame(width: iconSize, height: iconSize)
+                .activeGlow(isActive: isActive, style: prefs.indicatorStyle)
+            // Dot only in classic dot style (these tiles are inherently "running").
+            if prefs.indicatorStyle == .dot {
                 Circle()
                     .fill(Color.primary.opacity(0.6))
-                    .frame(width: 4 * scale, height: 4 * scale)
+                    .frame(width: 4, height: 4)
             }
         }
-        .frame(width: max(iconSize, displaySize), height: max(iconSize, displaySize))
+        .frame(width: iconSize, height: iconSize)
         .contentShape(Rectangle())
         .onTapGesture { RunningAppsMonitor.shared.activate(entry) }
         .help(entry.name)
-        // Direct tracking via smoothed hoverPoint (no per-frame spring for responsiveness)
     }
 }
 
@@ -1037,36 +818,25 @@ struct DockDivider: View {
 }
 
 private struct EditModePill: View {
-    @EnvironmentObject private var prefs: Preferences
     @State private var pulse = false
-
     var body: some View {
-        Button {
-            prefs.isEditingLayout = false
-        } label: {
-            HStack(spacing: 6) {
-                Image(systemName: "xmark")
-                    .font(.system(size: 10, weight: .bold))
-                Text("Exit Edit Layout")
-                    .font(.system(size: 11, weight: .semibold, design: .rounded))
-            }
-            .foregroundStyle(.white)
-            .padding(.horizontal, 12)
-            .padding(.vertical, 5)
-            .background(
-                Capsule(style: .continuous)
-                    .fill(Color.accentColor.opacity(0.95))
-                    .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
-            )
+        HStack(spacing: 6) {
+            Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
+                .font(.system(size: 11, weight: .semibold))
+            Text("Edit Layout")
+                .font(.system(size: 11, weight: .semibold, design: .rounded))
         }
-        .buttonStyle(.plain)
-        .opacity(pulse ? 1.0 : 0.85)
-        .onAppear {
-            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
-                pulse = true
-            }
-        }
-        .help("Click to exit Edit Layout mode (or press Esc)")
+        .foregroundStyle(.white)
+        .padding(.horizontal, 10)
+        .padding(.vertical, 5)
+        .background(
+            Capsule(style: .continuous)
+                .fill(Color.accentColor)
+                .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 1)
+        )
+        .opacity(pulse ? 1.0 : 0.7)
+        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { pulse = true } }
+        .allowsHitTesting(false)
     }
 }
 
@@ -1077,18 +847,6 @@ private struct DockIsVerticalKey: EnvironmentKey { static let defaultValue: Bool
 private struct DockMagnifyEnabledKey: EnvironmentKey { static let defaultValue: Bool = true }
 private struct DockMagnifyMaxKey: EnvironmentKey { static let defaultValue: CGFloat = 110 }
 private struct DockLeadingPadKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
-private struct DockFrontmostPathKey: EnvironmentKey { static let defaultValue: String? = nil }
-private struct DockIDKey: EnvironmentKey { static let defaultValue: UUID? = nil }
-
-extension View {
-    @ViewBuilder func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
-        if condition {
-            transform(self)
-        } else {
-            self
-        }
-    }
-}
 
 extension EnvironmentValues {
     var dockHoverPoint: CGPoint? {
@@ -1110,16 +868,6 @@ extension EnvironmentValues {
     var dockLeadingPad: CGFloat {
         get { self[DockLeadingPadKey.self] }
         set { self[DockLeadingPadKey.self] = newValue }
-    }
-
-    var dockFrontmostPath: String? {
-        get { self[DockFrontmostPathKey.self] }
-        set { self[DockFrontmostPathKey.self] = newValue }
-    }
-
-    var dockID: UUID? {
-        get { self[DockIDKey.self] }
-        set { self[DockIDKey.self] = newValue }
     }
 }
 
@@ -1156,14 +904,6 @@ struct DockItemView: View {
 
     @State private var frameInDock: CGRect = .zero
     @State private var showFolderPopover: Bool = false
-
-    // Automatically close any open folder popover when the user starts dragging
-    // or enters Edit Layout mode (good UX, prevents confusing states).
-    private func closeFolderPopoverIfNeeded() {
-        if showFolderPopover && (prefs.isEditingLayout || dragState.draggingID != nil) {
-            showFolderPopover = false
-        }
-    }
     @State private var folderFormProgress: CGFloat = 0
     @EnvironmentObject var prefs: Preferences
     @StateObject private var runningMonitor = RunningAppsMonitor.shared
@@ -1172,7 +912,6 @@ struct DockItemView: View {
     @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
     @Environment(\.dockMagnifyMax) private var magnifyMax
     @Environment(\.dockLeadingPad) private var leadingPad
-    @Environment(\.dockFrontmostPath) private var frontmostPath
 
     /// Resting center of this item along the dock axis. Derived purely from
     /// layout inputs (padding + index*(icon+spacing) + icon/2) so that
@@ -1237,8 +976,7 @@ struct DockItemView: View {
                             .overlay(alignment: .topTrailing) {
                                 badgeOverlay(displaySize: displaySize)
                             }
-                            // No per-frame spring here — the smoothed hoverPoint in DockView + direct state update gives 1:1 responsive tracking.
-                            // Spring is only used on hover enter/exit in the parent for the "pop" feel.
+                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
                     }
                     // Badge anchored to the resting cell's top-right, NOT the
                     // magnified icon's, so it stays put when the icon grows
@@ -1266,24 +1004,12 @@ struct DockItemView: View {
             if prefs.labelMode == .below {
                 labelText
             }
-
-            // Open app visual treatment
-            let style = prefs.openAppVisualStyle
-            if isAppRunning {
-                if style == .glowAndDarken {
-                    // Glow for active, darken for inactive open apps (no dot)
-                    if isActiveApp {
-                        Circle()
-                            .fill(Color.accentColor.opacity(0.0))
-                            .frame(width: iconSize * 1.15, height: iconSize * 1.15)
-                            .shadow(color: Color.accentColor.opacity(0.7), radius: 7, x: 0, y: 0)
-                    }
-                } else if prefs.showRunningIndicators {
-                    // Classic dot
-                    Circle()
-                        .fill(Color.primary.opacity(0.6))
-                        .frame(width: 4, height: 4)
-                }
+            // Running-app indicator dot — only for classic "dot" style (shows under any running pinned item).
+            // For "glow" style the active (frontmost) item instead receives a soft halo via .activeGlow on the icon itself.
+            if prefs.indicatorStyle == .dot && isAppRunning {
+                Circle()
+                    .fill(Color.primary.opacity(0.6))
+                    .frame(width: 4, height: 4)
             }
         }
         .coordinateSpace(name: "item-\(item.id)")
@@ -1310,33 +1036,35 @@ struct DockItemView: View {
             // Ensure any open folder popover is closed when interacting with dock items (click-outside behavior for other icons).
             NotificationCenter.default.post(name: Notification.Name("FocusDock.CloseAllFolderPopovers"), object: nil)
             switch item {
-            case .app(let a):
-                library.launch(a)
-            case .folder:
-                if showFolderPopover {
-                    // Tapping the same folder again → close it (toggle behavior)
-                    showFolderPopover = false
-                } else {
-                    // Small delay helps ensure any previous popover has fully closed
-                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
-                        showFolderPopover = true
-                    }
-                }
+            case .app(let a): library.launch(a)
+            case .folder: showFolderPopover.toggle()
             }
+        }
+        .popover(isPresented: $showFolderPopover, arrowEdge: .top) {
+            if case .folder(let f) = item {
+                FolderPopover(folder: f)
+                    .environmentObject(library)
+                    .environmentObject(prefs)
+            }
+        }
+        // Listen for global close requests (posted on any dock item tap or background) so that
+        // tapping elsewhere in the dock automatically dismisses an open folder popover ("click outside").
+        .onReceive(NotificationCenter.default.publisher(for: Notification.Name("FocusDock.CloseAllFolderPopovers"))) { _ in
+            showFolderPopover = false
         }
         .contextMenu {
-            if isTrash {
-                Button("Empty Trash") {
-                    library.emptyTrash()
-                }
-                .disabled(library.trashIsEmpty)
-
-                Button("Open Trash") {
-                    library.openTrash()
+            if DockView.isTrash(item) {
+                Button {
+                    let script = "tell application \"Finder\" to empty the trash"
+                    if let appleScript = NSAppleScript(source: script) {
+                        _ = appleScript.executeAndReturnError(nil)
+                        AppLibrary.shared.trashIsEmpty = true
+                    }
+                } label: {
+                    Label("Empty Trash", systemImage: "trash")
                 }
             }
         }
-        // Folder popover is handled via a transient NSPopover (see iconContent)
     }
 
     @ViewBuilder private func iconContent(size: CGFloat) -> some View {
@@ -1349,34 +1077,7 @@ struct DockItemView: View {
                 .activeGlow(isActive: isActive, style: prefs.indicatorStyle)
         case .folder(let f):
             FolderIconView(folder: f, size: size)
-                .background(
-                    FolderPopoverPresenter(
-                        isPresented: $showFolderPopover,
-                        arrowEdge: .top,
-                        content: {
-                            FolderPopover(folder: f)
-                                .environmentObject(library)
-                                .environmentObject(prefs)
-                                .environment(\.dockFrontmostPath, frontmostPath)
-                        }
-                    )
-                )
-                .onChange(of: prefs.isEditingLayout) { _ in
-                    if showFolderPopover { showFolderPopover = false }
-                }
-                .onChange(of: dragState.draggingID) { newValue in
-                    if showFolderPopover, newValue != nil {
-                        // Small delay so very short / accidental drags don't instantly close the popover
-                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
-                            if showFolderPopover {
-                                showFolderPopover = false
-                            }
-                        }
-                    }
-                }
-                .onReceive(NotificationCenter.default.publisher(for: .dockDidAutoHide)) { _ in
-                    if showFolderPopover { showFolderPopover = false }
-                }
+                .activeGlow(isActive: isActive, style: prefs.indicatorStyle)
         }
     }
 
@@ -1417,17 +1118,15 @@ struct DockItemView: View {
         }
     }
 
-    private var isActiveApp: Bool {
-        guard case .app(let a) = item else { return false }
-        guard let front = frontmostPath else { return false }
-        let url = URL(fileURLWithPath: a.path).resolvingSymlinksInPath().path
-        return front == url
-    }
-
-    private var isTrash: Bool {
-        guard case .app(let a) = item else { return false }
-        let trashPath = (NSHomeDirectory() as NSString).appendingPathComponent(".Trash")
-        return a.path == trashPath
+    /// True when this item (app or folder containing the app) is the frontmost application.
+    /// Used exclusively for the "glow" indicator style on the active item.
+    private var isActive: Bool {
+        switch item {
+        case .app(let a):
+            return runningMonitor.isAppActive(a.path)
+        case .folder(let f):
+            return runningMonitor.isFolderActive(f)
+        }
     }
 
     private var labelText: some View {
@@ -1627,32 +1326,14 @@ struct FolderIconView: View {
     let folder: FolderEntry
     let size: CGFloat
 
-    @EnvironmentObject var prefs: Preferences
-    @Environment(\.dockFrontmostPath) private var frontmostPath
-
-    private var containsActiveApp: Bool {
-        guard let front = frontmostPath else { return false }
-        return folder.apps.contains { $0.path == front }
-    }
-
-    private var isActiveStyle: Bool {
-        prefs.openAppVisualStyle == .glowAndDarken
-    }
-
     var body: some View {
         ZStack {
-            let baseFill = Color.primary.opacity(0.18)
-            let baseStroke = Color.primary.opacity(0.22)
-
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(baseFill)
+                .fill(Color.primary.opacity(0.18))
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(baseStroke, lineWidth: 0.5)
+                        .strokeBorder(Color.primary.opacity(0.22), lineWidth: 0.5)
                 )
-                .if(isActiveStyle && containsActiveApp) { view in
-                    view.shadow(color: Color.accentColor.opacity(0.65), radius: 10, x: 0, y: 0)
-                }
 
             let grid = Array(folder.apps.prefix(9))
             let cell = (size - 18) / 3
@@ -1685,7 +1366,7 @@ struct FolderPopover: View {
     let folder: FolderEntry
     @EnvironmentObject var library: AppLibrary
     @EnvironmentObject var prefs: Preferences
-    @Environment(\.dockFrontmostPath) private var frontmostPath
+    @StateObject private var runningMonitor = RunningAppsMonitor.shared
     @State private var editingName: Bool = false
     @State private var draftName: String = ""
 
@@ -1700,11 +1381,6 @@ struct FolderPopover: View {
     private let cellSpacing: CGFloat = 14
 
     var body: some View {
-        let leftPad = prefs.effectivePaddingLeft
-        let rightPad = prefs.effectivePaddingRight
-        let topPad = prefs.effectivePaddingTop
-        let bottomPad = prefs.effectivePaddingBottom
-
         let cols = Array(repeating: GridItem(.fixed(cellSize + 16), spacing: cellSpacing), count: resolvedColumns)
 
         VStack(alignment: .leading, spacing: 10) {
@@ -1715,15 +1391,12 @@ struct FolderPopover: View {
                 }
             }
         }
-        .padding(.top, topPad)
-        .padding(.bottom, bottomPad)
-        .padding(.leading, leftPad)
-        .padding(.trailing, rightPad)
-        .frame(
-            width: CGFloat(resolvedColumns) * (cellSize + 16) +
-                   CGFloat(max(0, resolvedColumns - 1)) * cellSpacing +
-                   leftPad + rightPad
-        )
+        // Use the same effective (scaled) padding values as the main dock for internal spacing consistency (replaces previous hardcoded 16).
+        .padding(.top, prefs.effectivePaddingTop)
+        .padding(.bottom, prefs.effectivePaddingBottom)
+        .padding(.leading, prefs.effectivePaddingLeft)
+        .padding(.trailing, prefs.effectivePaddingRight)
+        .frame(width: CGFloat(resolvedColumns) * (cellSize + 16) + CGFloat(max(0, resolvedColumns - 1)) * cellSpacing + (prefs.effectivePaddingLeft + prefs.effectivePaddingRight) + 16)
     }
 
     private var header: some View {
@@ -1755,17 +1428,13 @@ struct FolderPopover: View {
 
     @ViewBuilder
     private func folderAppCell(_ app: AppEntry) -> some View {
-        let isActive = (app.path == frontmostPath) && prefs.openAppVisualStyle == .glowAndDarken
-
         VStack(spacing: 4) {
             if prefs.labelMode == .above {
                 cellLabel(app)
             }
-            Image(nsImage: app.icon)
-                .resizable()
-                .interpolation(.high)
+            Image(nsImage: app.icon).resizable().interpolation(.high)
                 .frame(width: cellSize, height: cellSize)
-                .if(isActive) { $0.shadow(color: Color.accentColor.opacity(0.7), radius: 8, x: 0, y: 0) }
+                .activeGlow(isActive: runningMonitor.isAppActive(app.path), style: prefs.indicatorStyle)
                 .nativeToolTip(prefs.labelMode == .tooltip ? app.name : "")
             if prefs.labelMode == .below {
                 cellLabel(app)
@@ -1779,110 +1448,6 @@ struct FolderPopover: View {
     private func cellLabel(_ app: AppEntry) -> some View {
         Text(app.name).font(.system(size: 10)).lineLimit(1)
             .frame(maxWidth: cellSize + 16)
-    }
-}
-
-// MARK: - Transient Folder Popover Presenter
-
-/// Presents a FolderPopover as an NSPopover with .transient behavior.
-/// This ensures the popover automatically closes when the user clicks anywhere
-/// outside of it (including the desktop or other dock items).
-struct FolderPopoverPresenter<Content: View>: NSViewRepresentable {
-    @Binding var isPresented: Bool
-    let arrowEdge: Edge
-    let content: () -> Content
-
-    func makeNSView(context: Context) -> NSView {
-        let view = NSView()
-        return view
-    }
-
-    func updateNSView(_ nsView: NSView, context: Context) {
-        if isPresented {
-            context.coordinator.showPopover(from: nsView)
-        } else {
-            context.coordinator.hidePopover()
-        }
-    }
-
-    func makeCoordinator() -> Coordinator {
-        Coordinator(isPresented: $isPresented, arrowEdge: arrowEdge, content: content)
-    }
-
-    final class Coordinator: NSObject, NSPopoverDelegate {
-        @Binding var isPresented: Bool
-        let arrowEdge: Edge
-        let content: () -> Content
-
-        private var popover: NSPopover?
-
-        init(isPresented: Binding<Bool>, arrowEdge: Edge, content: @escaping () -> Content) {
-            self._isPresented = isPresented
-            self.arrowEdge = arrowEdge
-            self.content = content
-        }
-
-        func showPopover(from view: NSView) {
-            guard popover == nil else { return }
-
-            let hostingController = NSHostingController(rootView: content())
-            hostingController.view.alphaValue = 0
-            hostingController.view.layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
-
-            let popover = NSPopover()
-            popover.contentViewController = hostingController
-            popover.behavior = .transient
-            popover.delegate = self
-
-            let preferredEdge: NSRectEdge = switch arrowEdge {
-            case .top:    .maxY
-            case .bottom: .minY
-            case .leading: .minX
-            case .trailing: .maxX
-            }
-
-            popover.show(relativeTo: view.bounds, of: view, preferredEdge: preferredEdge)
-            self.popover = popover
-
-            // Nice springy scale + fade in animation
-            NSAnimationContext.runAnimationGroup { context in
-                context.duration = 0.28
-                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0) // nice ease
-                hostingController.view.animator().alphaValue = 1.0
-                hostingController.view.animator().layer?.setAffineTransform(CGAffineTransform(scaleX: 0.92, y: 0.92))
-            } completionHandler: {
-                NSAnimationContext.runAnimationGroup { ctx in
-                    ctx.duration = 0.18
-                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
-                    hostingController.view.animator().layer?.setAffineTransform(.identity)
-                }
-            }
-        }
-
-        func hidePopover() {
-            guard let popover = popover else { return }
-
-            // Gentle scale + fade out before closing
-            if let hosting = popover.contentViewController?.view {
-                NSAnimationContext.runAnimationGroup { context in
-                    context.duration = 0.16
-                    context.timingFunction = CAMediaTimingFunction(name: .easeIn)
-                    hosting.animator().alphaValue = 0.0
-                    hosting.animator().layer?.setAffineTransform(CGAffineTransform(scaleX: 0.95, y: 0.95))
-                } completionHandler: {
-                    popover.close()
-                    self.popover = nil
-                }
-            } else {
-                popover.close()
-                self.popover = nil
-            }
-        }
-
-        func popoverDidClose(_ notification: Notification) {
-            isPresented = false
-            popover = nil
-        }
     }
 }
 
@@ -1907,10 +1472,6 @@ extension View {
     func nativeToolTip(_ text: String) -> some View {
         background(ToolTipView(text: text).allowsHitTesting(false))
     }
-}
-
-extension Notification.Name {
-    static let dockDidAutoHide = Notification.Name("FocusDock.DidAutoHide")
 }
 
 // MARK: - Registry-updating GeometryReader extension

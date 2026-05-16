@@ -33,7 +33,7 @@ struct SettingsView: View {
                     .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
                     .tag(SettingsTab.apps)
                 ProfilesTab()
-                    .tabItem { Label("Profiles & Docks", systemImage: "person.2.circle") }
+                    .tabItem { Label("Profiles", systemImage: "person.2.circle") }
                     .tag(SettingsTab.profiles)
             }
             .padding()
@@ -518,16 +518,20 @@ struct SettingsView: View {
                         set: { prefs.bounceOnLaunch = $0 }
                     ))
                 }
-                settingRow(.showRunningIndicators) {
-                    Picker("Open app style", selection: Binding(
-                        get: { prefs.openAppVisualStyle },
-                        set: { prefs.openAppVisualStyle = $0 }
-                    )) {
-                        ForEach(Preferences.OpenAppVisualStyle.allCases) { style in
-                            Text(style.label).tag(style)
+                settingRow(.indicatorStyle) {
+                    HStack(spacing: 8) {
+                        Text("Style")
+                        Picker("", selection: Binding(
+                            get: { prefs.indicatorStyle },
+                            set: { prefs.indicatorStyle = $0 }
+                        )) {
+                            ForEach(Preferences.IndicatorStyle.allCases) { style in
+                                Text(style.label).tag(style)
+                            }
                         }
+                        .pickerStyle(.segmented)
+                        .frame(minWidth: 180)
                     }
-                    .pickerStyle(.segmented)
                 }
                 Text("Glow (default): soft halo around the frontmost active item. Dot: classic dots under running items. None: hide all running/active indicators.")
                     .font(.caption)

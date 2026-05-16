@@ -15,7 +15,6 @@ final class Preferences: ObservableObject {
     private let kDockIcon = "showDockIcon"
     private let kMenuBar = "showMenuBarIcon"
     private let kEdge = "dockEdge"
-    private let kIsPlaced = "isPlaced"
     private let kEditing = "isEditingLayout"
     private let kEditingDocks = "isEditingDocks"
     private let kIconSize = "iconSize"
@@ -40,7 +39,7 @@ final class Preferences: ObservableObject {
     private let kAutoHide = "autoHideDock"
     private let kBounce = "bounceOnLaunch"
     private let kRunningDots = "showRunningIndicators"
-    private let kOpenAppVisualStyle = "openAppVisualStyle"
+    private let kIndicatorStyle = "indicatorStyle"
     private let kShowRecents = "showRecentApps"
     private let kFillWidth = "fillWidth"
     private let kPaddingUniform = "paddingUniform"
@@ -88,13 +87,14 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: pk(kAutoHide)) == nil { defaults.set(true, forKey: pk(kAutoHide)) }
         if defaults.object(forKey: pk(kBounce)) == nil { defaults.set(true, forKey: pk(kBounce)) }
         if defaults.object(forKey: pk(kRunningDots)) == nil { defaults.set(true, forKey: pk(kRunningDots)) }
-        if defaults.object(forKey: pk(kOpenAppVisualStyle)) == nil { defaults.set(OpenAppVisualStyle.glowAndDarken.rawValue, forKey: pk(kOpenAppVisualStyle)) }
+        if defaults.object(forKey: pk(kIndicatorStyle)) == nil { defaults.set("glow", forKey: pk(kIndicatorStyle)) }
         if defaults.object(forKey: pk(kShowRecents)) == nil { defaults.set(false, forKey: pk(kShowRecents)) }
-        if defaults.object(forKey: pk(kFillWidth)) == nil { defaults.set(true, forKey: pk(kFillWidth)) }
+        if defaults.object(forKey: pk(kFillWidth)) == nil { defaults.set(false, forKey: pk(kFillWidth)) }
         if defaults.object(forKey: pk(kPaddingUniform)) == nil { defaults.set(false, forKey: pk(kPaddingUniform)) }
         if defaults.object(forKey: pk(kDockScale)) == nil { defaults.set(1.0, forKey: pk(kDockScale)) }
         // Reset transient edit-layout flag every launch (always global).
         defaults.set(false, forKey: kEditing)
+        defaults.set(false, forKey: kEditingDocks)
 
         // Singleton case: when the editing target changes, push @Published so
         // SwiftUI observers bound to Preferences re-read all values.
@@ -138,9 +138,9 @@ final class Preferences: ObservableObject {
              flushBottom, cornerRadius,
              tintBackground, backgroundColor, showBorder, borderColor, borderWidth,
              edgeOffset, showFinder, showTrash,
-             autoHideDock, bounceOnLaunch, showRunningIndicators, showRecentApps,
-             openAppVisualStyle,
-             fillWidth, paddingUniform, dockScale
+             autoHideDock, bounceOnLaunch, showRunningIndicators, indicatorStyle, showRecentApps,
+             fillWidth, paddingUniform, dockScale,
+             isEditingLayout, isEditingDocks
     }
 
     /// Plain-Any defaults for primitives; the RGBA ones are handled specially in `reset(_:)`.
@@ -149,14 +149,14 @@ final class Preferences: ObservableObject {
         .iconSize: 64.0, .spacing: 14.0,
         .magnifyOnHover: true, .magnifySize: 110.0,
         .labelMode: "tooltip",
-        .marginTop: 0.0, .marginBottom: 10.0, .marginLeft: 15.0, .marginRight: 15.0,
+        .marginTop: 0.0, .marginBottom: 10.0, .marginLeft: 0.0, .marginRight: 0.0,
         .flushBottom: true, .cornerRadius: 24.0,
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
         .edgeOffset: 8.0, .showFinder: true, .showTrash: true,
-        .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .showRecentApps: false,
-        .openAppVisualStyle: OpenAppVisualStyle.glowAndDarken,
+        .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .indicatorStyle: "glow", .showRecentApps: false,
         .fillWidth: true, .paddingUniform: false,
-        .dockScale: 1.0
+        .dockScale: 1.0,
+        .isEditingLayout: false, .isEditingDocks: false
     ]
 
     func reset(_ key: Key) {
@@ -207,18 +207,6 @@ final class Preferences: ObservableObject {
         get { defaults.bool(forKey: pk(kRunningDots)) }
         set { defaults.set(newValue, forKey: pk(kRunningDots)); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
     }
-
-    var openAppVisualStyle: OpenAppVisualStyle {
-        get {
-            let raw = defaults.string(forKey: pk(kOpenAppVisualStyle)) ?? OpenAppVisualStyle.glowAndDarken.rawValue
-            return OpenAppVisualStyle(rawValue: raw) ?? .glowAndDarken
-        }
-        set {
-            defaults.set(newValue.rawValue, forKey: pk(kOpenAppVisualStyle))
-            _tick &+= 1
-            NotificationCenter.default.post(name: Self.changed, object: nil)
-        }
-    }
     var showRecentApps: Bool {
         get { defaults.bool(forKey: pk(kShowRecents)) }
         set { defaults.set(newValue, forKey: pk(kShowRecents)); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
@@ -251,16 +239,14 @@ final class Preferences: ObservableObject {
         }
     }
 
-    enum OpenAppVisualStyle: String, CaseIterable, Identifiable {
-        case dot
-        case glowAndDarken
-
+    enum IndicatorStyle: String, CaseIterable, Identifiable {
+        case glow, dot, none
         var id: String { rawValue }
-
         var label: String {
             switch self {
-            case .dot: return "Dot indicator"
-            case .glowAndDarken: return "Glow (active) + Darken (inactive)"
+            case .glow: return "Glow"
+            case .dot: return "Dot"
+            case .none: return "None"
             }
         }
     }
@@ -369,21 +355,6 @@ final class Preferences: ObservableObject {
         }
     }
 
-    /// Whether this dock has been dragged to a screen edge at least once.
-    /// New docks start as `false` so they appear floating in the center with
-    /// a prominent "drag to edge to activate" prompt.
-    var isPlaced: Bool {
-        get {
-            if defaults.object(forKey: pk(kIsPlaced)) == nil { return true } // legacy docks
-            return defaults.bool(forKey: pk(kIsPlaced))
-        }
-        set {
-            defaults.set(newValue, forKey: pk(kIsPlaced))
-            _tick &+= 1
-            NotificationCenter.default.post(name: Self.changed, object: nil)
-        }
-    }
-
     var iconSize: Double {
         get { defaults.double(forKey: pk(kIconSize)) }
         set { defaults.set(newValue, forKey: pk(kIconSize)); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
@@ -427,10 +398,6 @@ final class Preferences: ObservableObject {
             NotificationCenter.default.post(name: Self.changed, object: nil)
         }
     }
-
-    /// Global "Edit Docks" mode — when enabled, each dock shows a prominent
-    /// delete (X / trash) button in the top center so the user can remove docks
-    /// directly from the visual representation.
     var isEditingDocks: Bool {
         get { defaults.bool(forKey: kEditingDocks) }
         set {
