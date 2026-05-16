@@ -197,13 +197,12 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         // safe-area or rounding reasons, the bleed swallows it. The bleed is
         // off-screen, so it has no visible cost.
         let bleed: CGFloat = useFlush ? 3 : 0
-        // Magnification headroom along the dock axis: when an edge icon
-        // magnifies, the centered icon stack expands by (magnifySize -
-        // effectiveIcon). Reserve that growth in the window length so the
-        // rounded chrome corners stay outside the magnified icon — otherwise
-        // the icon overlaps the corner and the dock visually "goes square"
-        // at the hovered end.
-        let alongHeadroom: CGFloat = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - effectiveIcon) : 0
+        // Magnification headroom along the dock axis: reserve a *full* max single-icon
+        // growth buffer on *each* side of the resting bar. When hovering an end icon
+        // the chrome can expand almost a full (magnifySize - icon) in one direction.
+        // Using 2x ensures the window is wide enough on the hovered side so the chrome
+        // never gets cut off.
+        let alongHeadroom: CGFloat = prefs.magnifyOnHover ? 2 * max(0, CGFloat(prefs.magnifySize) - effectiveIcon) : 0
         let frame: NSRect
         switch edge {
         case .bottom:
@@ -604,8 +603,11 @@ struct DockView: View {
         let borderWidth: CGFloat = editing ? 2 : CGFloat(prefs.borderWidth)
 
         ZStack {
+            // Reverted bar to high-quality vibrancy for best "background magnifies with items" stretch behavior.
+            // Real native Liquid Glass (NSGlassEffectView) kept for tooltip bubble only (static size works great).
             VisualEffectBlur(material: .popover, blendingMode: .behindWindow)
                 .clipShape(dockShape)
+
             if prefs.tintBackground {
                 dockShape
                     .fill(Color(.sRGB, red: bg.r, green: bg.g, blue: bg.b, opacity: bg.a))
@@ -615,8 +617,8 @@ struct DockView: View {
         }
     }
 
-    /// Resting thickness of the dock panel — used to keep the chrome size
-    /// stable as icons magnify (only the icons grow, not the panel).
+    /// Base (non-magnified) thickness of the dock panel. We add dynamic extra
+    /// during hover (extraPerp) so the chrome grows with icons like native Dock.
     private var restingThickness: CGFloat {
         iconSize + CGFloat(isVertical ? prefs.effectivePaddingLeft + prefs.effectivePaddingRight : prefs.effectivePaddingTop + prefs.effectivePaddingBottom) + 8
     }
@@ -657,14 +659,14 @@ struct DockView: View {
     }
 
     /// Extra left/top offset to the icon row caused by alongHeadroom (the window
-    /// is widened symmetrically for mag growth room at ends; the HStack centers
-    /// in it). Added to leadingPad so restingCenter matches actual icon centers
-    /// and hover mag peak is not biased right.
+    /// now reserves a full max-growth buffer on each side). Added to leadingPad
+    /// so the restingCenters used for hover magnification are correct and the
+    /// peak does not get biased when the chrome expands on one end.
     private var headroomExtra: CGFloat {
         guard prefs.magnifyOnHover else { return 0 }
         let base = CGFloat(prefs.effectiveIconSize)
         let mag = CGFloat(prefs.effectiveMagnifySize)
-        return max(0, mag - base) / 2
+        return max(0, mag - base)
     }
 
     /// Pure helper (not in a @ViewBuilder context) that classifies gaps around
@@ -750,8 +752,60 @@ struct DockView: View {
                 return CGFloat(prefs.effectivePaddingLeft) + packed + CGFloat(prefs.effectivePaddingRight)
             }()
 
-            // Ideal along dimension for the window to make the background resize dynamically to the content
-            let _ = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - scaledIcon) : 0
+            // Current max mag scale from hover (Gaussian on resting centers). Drive dynamic
+            // chrome size so background bar itself grows in thickness/width with icons (native match).
+            let currentMaxScale: CGFloat = {
+                guard prefs.magnifyOnHover, let hp = hoverPoint else { return 1 }
+                let mouse = isVertical ? hp.y : hp.x
+                var m: CGFloat = 1
+                for (_, c) in restingIDToCenter {
+                    let d = abs(mouse - c)
+                    let sig = scaledIcon * 1.6
+                    let g = exp(-(d * d) / (2 * sig * sig))
+                    let ms = max(1.0, magnifyMax / scaledIcon)
+                    let s = 1 + (ms - 1) * g
+                    if s > m { m = s }
+                }
+                return m
+            }()
+            let extraPerp: CGFloat = prefs.magnifyOnHover ? max(0, (currentMaxScale - 1) * (scaledIcon / 2)) : 0
+            let dynamicThickness = restingThickness + extraPerp
+
+            // Live along-axis packed width using each slot's *current* magnified cell size
+            // (instead of base scaledIcon). This ensures the left and right padding
+            // (effectivePaddingLeft/Right baked into the chrome) stay *exactly* the same
+            // as in the non-hover resting state, even as end icons grow and push neighbors.
+            let livePacked: CGFloat = {
+                var sum: CGFloat = 0
+                let slots = renderedSlots
+                for (i, slot) in slots.enumerated() {
+                    let baseCell: CGFloat = slotOccupiesIconSpace(slot) ? scaledIcon : customDividerCellWidth
+                    var scale: CGFloat = 1.0
+                    if case .item(let it) = slot, let c = restingIDToCenter[it.id] {
+                        let mouse = isVertical ? (hoverPoint?.y ?? 0) : (hoverPoint?.x ?? 0)
+                        let dist = abs(mouse - c)
+                        let sig = scaledIcon * 1.6
+                        let g = exp(-(dist * dist) / (2 * sig * sig))
+                        let maxS = max(1.0, magnifyMax / scaledIcon)
+                        scale = 1 + (maxS - 1) * g
+                    } else if case .runningApp(let r) = slot, let c = restingIDToCenter[r.id] {
+                        let mouse = isVertical ? (hoverPoint?.y ?? 0) : (hoverPoint?.x ?? 0)
+                        let dist = abs(mouse - c)
+                        let sig = scaledIcon * 1.6
+                        let g = exp(-(dist * dist) / (2 * sig * sig))
+                        let maxS = max(1.0, magnifyMax / scaledIcon)
+                        scale = 1 + (maxS - 1) * g
+                    }
+                    let liveCell = slotOccupiesIconSpace(slot) ? max(baseCell, baseCell * scale) : baseCell
+                    sum += liveCell
+                    if i < slots.count - 1 {
+                        let g = shouldUseUserGap(between: slot, and: slots[i + 1]) ? userGap : fillGap
+                        sum += g
+                    }
+                }
+                return sum
+            }()
+            let dynamicBarAlong = CGFloat(prefs.effectivePaddingLeft) + livePacked + CGFloat(prefs.effectivePaddingRight)
 
             ZStack(alignment: dockAlignment) {
                 // The chrome bar (with icons overlaid directly on it for perfect
@@ -762,8 +816,8 @@ struct DockView: View {
                 // ensures the dock is always visible.
                 let chrome = dockChrome
                     .frame(
-                        width: isVertical ? restingThickness : (prefs.fillWidth ? nil : barWidth),
-                        height: isVertical ? (prefs.fillWidth ? nil : barWidth) : restingThickness
+                        width: isVertical ? dynamicThickness : (prefs.fillWidth ? nil : dynamicBarAlong),
+                        height: isVertical ? (prefs.fillWidth ? nil : dynamicBarAlong) : dynamicThickness
                     )
                     .overlay(alignment: .center) {
                         Group {
@@ -1115,11 +1169,25 @@ struct RunningAppTileView: View {
                 Color.clear
                     .frame(width: cellW, height: cellH)
                     .overlay(alignment: .center) {
-                        Image(nsImage: entry.icon)
+                        // Native Liquid Glass magnification for strongly hovered running apps.
+                        // Deleted old custom shadow + lift code.
+                        let isStronglyMagnified = magScale > 1.15
+                        let baseIcon = Image(nsImage: entry.icon)
                             .resizable()
                             .interpolation(.high)
                             .frame(width: displaySize, height: displaySize)
                             .activeGlow(isRunning: state.isRunning, isFrontmost: state.isFrontmost, style: prefs.indicatorStyle)
+
+                        let iconView: AnyView = if isStronglyMagnified {
+                            AnyView(
+                                LiquidGlassEffect(cornerRadius: 6)
+                                    .frame(width: displaySize, height: displaySize)
+                                    .overlay(baseIcon)
+                            )
+                        } else {
+                            AnyView(baseIcon)
+                        }
+                        iconView
                             .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
                     }
             }
@@ -1586,8 +1654,22 @@ struct DockItemView: View {
                 Color.clear
                     .frame(width: cellW, height: cellH)
                     .overlay(alignment: .center) {
-                        iconContent(size: displaySize)
+                        // Native Liquid Glass magnification for strongly hovered icons.
+                        // Deleted all old custom shadow + manual lift code.
+                        let isStronglyMagnified = magScale > 1.15
+                        let baseIcon = iconContent(size: displaySize)
+                            .frame(width: displaySize, height: displaySize)
                             .opacity(isDetached ? 0 : (isDragging ? 0.85 : 1.0))
+
+                        let magnifiedIcon = isStronglyMagnified
+                            ? AnyView(
+                                LiquidGlassEffect(cornerRadius: 6)
+                                    .frame(width: displaySize, height: displaySize)
+                                    .overlay(baseIcon)
+                            )
+                            : AnyView(baseIcon)
+
+                        magnifiedIcon
                             // Badge rides the actual displayed icon's top-right
                             // corner so it stays pinned to the corner whether
                             // the icon is at rest or magnified.
@@ -2308,7 +2390,7 @@ struct LiquidGlassTooltip: View {
     private let cornerRadius: CGFloat = 13
     private let arrowBase: CGFloat = 12
     private let arrowHeight: CGFloat = 7
-    private let overlap: CGFloat = 2.5  // slightly more overlap for seamless merge at tighter gap
+    private let overlap: CGFloat = 1.0  // minimal intrusion so bubble does not overlap/cover the arrow
     private let hPadding: CGFloat = 11
     private let vPadding: CGFloat = 6
 
@@ -2332,7 +2414,7 @@ struct LiquidGlassTooltip: View {
     }
 
     private var arrowOffset: CGSize {
-        let o: CGFloat = 1.0 // tighter overlap for the arrow base at the new smaller gap (2.0)
+        let o: CGFloat = 0.5
         switch model.direction {
         case .down: return CGSize(width: 0, height: -o)
         case .up: return CGSize(width: 0, height: o)
@@ -2362,15 +2444,9 @@ struct LiquidGlassTooltip: View {
     }
 
     private var bubbleBackground: some View {
-        let shape = RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
-        return shape
-            .fill(Color.clear)
-            .background(
-                VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
-                    .clipShape(shape)
-            )
+        LiquidGlassEffect(cornerRadius: cornerRadius)
             .overlay(
-                shape
+                RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.8)
             )
             .shadow(color: .black.opacity(0.28), radius: 10, x: 0, y: 4)
@@ -2439,7 +2515,7 @@ final class DockTooltipPanel {
 
         let body = idealSize(for: text)
         let arrowH: CGFloat = 7
-        let ov: CGFloat = 2.0
+        let ov: CGFloat = 1.0
         let total: CGSize
         switch direction {
         case .down, .up:
@@ -2454,7 +2530,7 @@ final class DockTooltipPanel {
         let contentLeftScreenX = dockF.minX
         let icX = contentLeftScreenX + itemFrame.midX
         let icY = contentTopScreenY - itemFrame.midY
-        let gap: CGFloat = 2.0  // tighter clearance so the ground pointer (arrow) sits "stuck" to the icon top without overlap or excessive offset
+        let gap: CGFloat = 4.0  // slightly more clearance for new glass bubble + legacy arrow hybrid
 
         let pw = total.width
         let ph = total.height
@@ -2619,4 +2695,39 @@ struct VisualEffectBlur: NSViewRepresentable {
         return v
     }
     func updateNSView(_ nsView: NSVisualEffectView, context: Context) {}
+}
+
+/// Official native Liquid Glass (macOS 26+).
+/// Falls back to the legacy .popover VisualEffectView on older macOS.
+/// This is what gives the real system Dock / floating UI "Liquid Glass" look
+/// with proper depth, refraction and dynamic lighting.
+struct LiquidGlassEffect: NSViewRepresentable {
+    var cornerRadius: CGFloat = 24
+
+    func makeNSView(context: Context) -> NSView {
+        if #available(macOS 26.0, *) {
+            let glass = NSGlassEffectView()
+            glass.cornerRadius = cornerRadius
+            return glass
+        } else {
+            let v = NSVisualEffectView()
+            v.material = .popover
+            v.blendingMode = .behindWindow
+            v.state = .active
+            return v
+        }
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if #available(macOS 26.0, *) {
+            if let glass = nsView as? NSGlassEffectView {
+                glass.cornerRadius = cornerRadius
+            }
+        } else {
+            if let v = nsView as? NSVisualEffectView {
+                v.material = .popover
+                v.blendingMode = .behindWindow
+            }
+        }
+    }
 }
