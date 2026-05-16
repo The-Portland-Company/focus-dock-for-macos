@@ -1,6 +1,8 @@
 import Foundation
 import AppKit
+import ApplicationServices
 import Combine
+import os
 
 /// One running app that is NOT pinned in the user's library — surfaced into
 /// the dock as an ephemeral tile (mirrors native macOS Dock behavior, which
@@ -33,6 +35,7 @@ struct AppRunningState: Equatable {
 /// cheap and event-driven (no timer).
 final class RunningAppsMonitor: ObservableObject {
     static let shared = RunningAppsMonitor()
+    private static let log = Logger(subsystem: "com.theportlandcompany.FocusDock", category: "RunningApps")
 
     @Published private(set) var apps: [RunningAppEntry] = []
     @Published private(set) var frontmostPath: String? = nil
@@ -70,24 +73,55 @@ final class RunningAppsMonitor: ObservableObject {
 
     /// Bring the app to the front (or relaunch it if it was terminated between
     /// the publish and the tap). Mirrors a click on a native Dock running-app
-    /// tile.
+    /// tile — including unminimizing a window (genie effect) when all of the
+    /// app's windows are currently minimized.
     func activate(_ entry: RunningAppEntry) {
-        print("[Recent Activate] called for \(entry.name) pid=\(entry.pid)")
+        Self.log.info("activate \(entry.name, privacy: .public) pid=\(entry.pid)")
         let url = URL(fileURLWithPath: entry.path)
 
-        // Prefer activating the existing instance (preserves windows, spaces, etc.)
-        if let running = NSRunningApplication(processIdentifier: entry.pid),
-           !running.isTerminated {
-            print("[Recent Activate] using NSRunningApplication.activate for \(entry.name)")
-            running.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        guard let running = NSRunningApplication(processIdentifier: entry.pid),
+              !running.isTerminated else {
+            Self.log.info("relaunching \(entry.name, privacy: .public) (terminated)")
+            let config = NSWorkspace.OpenConfiguration()
+            config.activates = true
+            NSWorkspace.shared.openApplication(at: url, configuration: config, completionHandler: nil)
             return
         }
 
-        print("[Recent Activate] falling back to NSWorkspace.openApplication for \(entry.name)")
-        // Fallback: launch/activate via the modern API (more reliable than the old open(_:))
-        let config = NSWorkspace.OpenConfiguration()
-        config.activates = true
-        NSWorkspace.shared.openApplication(at: url, configuration: config, completionHandler: nil)
+        running.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+
+        // Native-dock parity: if every window is minimized, restore the most
+        // recently minimized one with a genie effect. AXMinimized=false is
+        // what triggers the system animation.
+        let axApp = AXUIElementCreateApplication(entry.pid)
+        guard let axWindows = copyAXAttribute(axApp, kAXWindowsAttribute) as? [AXUIElement] else {
+            Self.log.info("no AX windows for \(entry.name, privacy: .public) — accessibility denied?")
+            return
+        }
+        var minimizedWindows: [AXUIElement] = []
+        var hasVisibleWindow = false
+        for w in axWindows {
+            let isMin = (copyAXAttribute(w, kAXMinimizedAttribute) as? Bool) ?? false
+            if isMin {
+                minimizedWindows.append(w)
+            } else {
+                hasVisibleWindow = true
+            }
+        }
+        Self.log.info("\(entry.name, privacy: .public) windows visible=\(hasVisibleWindow) minimized=\(minimizedWindows.count)")
+        if !hasVisibleWindow, let target = minimizedWindows.first {
+            let setErr = AXUIElementSetAttributeValue(target, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
+            AXUIElementPerformAction(target, kAXRaiseAction as CFString)
+            Self.log.info("unminimize result=\(setErr.rawValue) for \(entry.name, privacy: .public)")
+            // Re-activate so we end up frontmost after the genie completes.
+            running.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
+        }
+    }
+
+    private func copyAXAttribute(_ el: AXUIElement, _ attr: String) -> AnyObject? {
+        var value: AnyObject?
+        let err = AXUIElementCopyAttributeValue(el, attr as CFString, &value)
+        return err == .success ? value : nil
     }
 
     private func refresh() {
