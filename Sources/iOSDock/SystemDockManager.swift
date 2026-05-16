@@ -30,7 +30,7 @@ enum SystemDockManager {
     // Persistent state in our app's UserDefaults (NOT com.apple.dock).
     private static let kHidden = "systemDockHidden"
     private static let kSnapshotTaken = "savedDock.snapshotTaken"
-    private static let savedKeys = ["autohide", "autohide-delay", "autohide-time-modifier", "no-bouncing", "tilesize", "magnification", "largesize"]
+    private static let savedKeys = ["autohide", "autohide-delay", "autohide-time-modifier", "no-bouncing", "tilesize", "magnification", "largesize", "mineffect"]
     private static let dockDomain = "com.apple.dock" as CFString
 
     /// Hide system Dock by writing autohide + huge delay + zero animation, then `killall Dock`.
@@ -47,6 +47,12 @@ enum SystemDockManager {
         setDockValue("tilesize", 16 as CFNumber)
         setDockValue("magnification", kCFBooleanFalse)
         setDockValue("largesize", 16 as CFNumber)
+        // The genie minimization effect targets the system Dock's app-tile
+        // location. With our custom dock visible, the resulting animation
+        // points at the hidden system Dock (roughly bottom-center) instead
+        // of the matching icon in our dock. Switching to "scale" makes the
+        // window shrink in place, which has no implied target.
+        setDockValue("mineffect", "scale" as CFString)
         CFPreferencesAppSynchronize(dockDomain)
         restartDockSync()
         let d = UserDefaults.standard
