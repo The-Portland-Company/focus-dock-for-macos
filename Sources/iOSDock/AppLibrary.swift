@@ -28,12 +28,25 @@ struct AppEntry: Identifiable, Equatable, Codable {
 final class IconCache {
     static let shared = IconCache()
     private var cache: [String: NSImage] = [:]
+    private var trashEmptyImage: NSImage?
+    private var trashFullImage: NSImage?
     private let renderSize: CGFloat = 256
+
+    func clearTrashEmpty() { trashEmptyImage = nil }
+    func clearTrashFull()  { trashFullImage = nil }
 
     func icon(for path: String) -> NSImage {
         let trashPath = (NSHomeDirectory() as NSString).appendingPathComponent(".Trash")
         let isTrash = path == trashPath
-        if !isTrash, let cached = cache[path] { return cached }
+
+        if isTrash {
+            let isEmpty = AppLibrary.shared.trashIsEmpty
+            if isEmpty, let cached = trashEmptyImage { return cached }
+            if !isEmpty, let cached = trashFullImage { return cached }
+        } else if let cached = cache[path] {
+            return cached
+        }
+
         let raw = rawIcon(for: path)
         let img = NSImage(size: NSSize(width: renderSize, height: renderSize))
         img.lockFocus()
@@ -41,7 +54,16 @@ final class IconCache {
         raw.draw(in: NSRect(x: 0, y: 0, width: renderSize, height: renderSize),
                  from: .zero, operation: .sourceOver, fraction: 1.0)
         img.unlockFocus()
-        if !isTrash { cache[path] = img }
+
+        if isTrash {
+            if AppLibrary.shared.trashIsEmpty {
+                trashEmptyImage = img
+            } else {
+                trashFullImage = img
+            }
+        } else {
+            cache[path] = img
+        }
         return img
     }
 
@@ -125,7 +147,17 @@ final class AppLibrary: ObservableObject {
     }
 
     @Published var badgeStates: [String: AppBadgeState] = [:]
-    @Published var trashIsEmpty: Bool = true
+    @Published var trashIsEmpty: Bool = true {
+        didSet {
+            // When the state flips, clear the now-stale cached image for the *other* state
+            // so the next icon request renders the correct version.
+            if trashIsEmpty {
+                IconCache.shared.clearTrashFull()
+            } else {
+                IconCache.shared.clearTrashEmpty()
+            }
+        }
+    }
 
     func badgeState(for appName: String) -> AppBadgeState? {
         badgeStates[appName.lowercased()]

@@ -126,6 +126,16 @@ struct SettingsView: View {
                         ForEach(permissionEntries, id: \.title) { entry in
                             permissionRow(entry)
                         }
+
+                        Divider().padding(.vertical, 4)
+
+                        Button("Request Accessibility Access…") {
+                            BadgeMonitor.requestAccessibilityPermission()
+                        }
+                        .buttonStyle(.link)
+                        Text("Opens the system dialog so you can grant (or re-grant) Accessibility permission. Only needed for live badges and minimized windows.")
+                            .font(.caption)
+                            .foregroundStyle(.secondary)
                     }
                     .padding(.top, 8)
                 }
@@ -267,7 +277,10 @@ struct SettingsView: View {
                   detail: "Stores your settings in this app's UserDefaults plist."),
             .init(icon: "rectangle.on.rectangle",
                   title: "Display a floating panel above all apps",
-                  detail: "A standard non-activating panel pinned to the screen — no Accessibility or Screen Recording permission is requested.")
+                  detail: "A standard non-activating panel pinned to the screen."),
+            .init(icon: "accessibility",
+                  title: "Read badges & minimized windows from the system Dock",
+                  detail: "Uses macOS Accessibility (AX) APIs to read live badge numbers and minimized window state from Apple's Dock. This is required because there is no public non-AX API for dock badges or minimized windows.")
         ]
     }
 

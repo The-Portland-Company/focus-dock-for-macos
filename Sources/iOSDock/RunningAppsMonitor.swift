@@ -72,12 +72,22 @@ final class RunningAppsMonitor: ObservableObject {
     /// the publish and the tap). Mirrors a click on a native Dock running-app
     /// tile.
     func activate(_ entry: RunningAppEntry) {
+        print("[Recent Activate] called for \(entry.name) pid=\(entry.pid)")
+        let url = URL(fileURLWithPath: entry.path)
+
+        // Prefer activating the existing instance (preserves windows, spaces, etc.)
         if let running = NSRunningApplication(processIdentifier: entry.pid),
            !running.isTerminated {
-            running.activate(options: [.activateAllWindows])
+            print("[Recent Activate] using NSRunningApplication.activate for \(entry.name)")
+            running.activate(options: [.activateAllWindows, .activateIgnoringOtherApps])
             return
         }
-        NSWorkspace.shared.open(URL(fileURLWithPath: entry.path))
+
+        print("[Recent Activate] falling back to NSWorkspace.openApplication for \(entry.name)")
+        // Fallback: launch/activate via the modern API (more reliable than the old open(_:))
+        let config = NSWorkspace.OpenConfiguration()
+        config.activates = true
+        NSWorkspace.shared.openApplication(at: url, configuration: config, completionHandler: nil)
     }
 
     private func refresh() {

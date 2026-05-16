@@ -924,33 +924,51 @@ struct DockView: View {
             DockTooltipPanel.shared.hideAll()
             return
         }
-        let pad: CGFloat = 14
         var picked: (id: UUID, name: String)? = nil
         let frames = ItemFrameRegistry.shared.frames
 
-        // 1. Pinned regular apps, folders, Finder, and Trash (via DockItemView)
+        let magEnabled = prefs.magnifyOnHover
+        let base = CGFloat(prefs.effectiveIconSize)
+        let maxM = CGFloat(prefs.effectiveMagnifySize)
+        let sigma = base * 1.6
+        let maxS = max(1.0, maxM / base)
+
+        func isOverVisualIcon(_ f: CGRect) -> Bool {
+            let along = isVertical ? point.y : point.x
+            let c = isVertical ? f.midY : f.midX
+            let d = abs(along - c)
+            let g = exp(-(d * d) / (2 * sigma * sigma))
+            let scale = magEnabled ? 1 + (maxS - 1) * g : 1.0
+            let vis = base * scale
+            let r = CGRect(x: f.midX - vis/2, y: f.midY - vis/2, width: vis, height: vis)
+            // Small tolerance so tooltip feels natural without triggering far outside the artwork
+            let tol: CGFloat = 5
+            return r.insetBy(dx: -tol, dy: -tol).contains(point)
+        }
+
+        // 1. Pinned regular apps, folders, Finder, and Trash
         let items = renderedItems
         for item in items {
-            if let f = frames[item.id], f.insetBy(dx: -pad, dy: -pad).contains(point) {
+            if let f = frames[item.id], isOverVisualIcon(f) {
                 picked = (item.id, itemLabel(item))
                 break
             }
         }
 
-        // 2. Running / recent (unpinned) apps — now participate in hover/magnify too
+        // 2. Running / recent (unpinned) apps
         if picked == nil {
             for entry in runningApps.apps {
-                if let f = frames[entry.id], f.insetBy(dx: -pad, dy: -pad).contains(point) {
+                if let f = frames[entry.id], isOverVisualIcon(f) {
                     picked = (entry.id, entry.name)
                     break
                 }
             }
         }
 
-        // 3. Minimized window tiles (show window title, falling back to app name)
+        // 3. Minimized window tiles
         if picked == nil {
             for win in minimized.windows {
-                if let f = frames[win.id], f.insetBy(dx: -pad, dy: -pad).contains(point) {
+                if let f = frames[win.id], isOverVisualIcon(f) {
                     let label = win.title.isEmpty ? win.appName : win.title
                     picked = (win.id, label)
                     break
@@ -1162,9 +1180,6 @@ struct RunningAppTileView: View {
     @Environment(\.dockLeadingPad) private var leadingPad
     @Environment(\.dockRestingCenters) private var restingCenters
 
-    /// Resting center of this item along the dock axis. Matches the formula
-    /// used by DockItemView so that recent-app tiles participate in the exact
-    /// same per-icon Gaussian magnification (and neighbor-push) system.
     private var restingCenterAlongAxis: CGFloat {
         if let c = restingCenters[entry.id] {
             return c
@@ -1176,7 +1191,6 @@ struct RunningAppTileView: View {
         guard magnifyEnabled, let hp = hoverPoint else { return 1 }
         let mouse = isVertical ? hp.y : hp.x
         let dist = abs(mouse - restingCenterAlongAxis)
-        // Falloff over ~2.5x the icon size (identical to DockItemView)
         let sigma = iconSize * 1.6
         let g = exp(-(dist * dist) / (2 * sigma * sigma))
         let maxScale = max(1.0, magnifyMax / iconSize)
@@ -1184,32 +1198,25 @@ struct RunningAppTileView: View {
     }
 
     private var state: AppRunningState {
-        // Ephemeral tiles are definitionally running; frontmost is what matters for strong vs subtle.
         let st = runningMonitor.runningState(for: entry.path)
         return AppRunningState(isRunning: true, isFrontmost: st.isFrontmost)
     }
 
     var body: some View {
         let magScale = magnificationScale
+        let displaySize = iconSize * magScale
 
-        // Normalized to the same iconSize-centered cell as DockItemView so all icons
-        // (pinned + running + minimized) sit on the exact same vertical and horizontal center line.
         ZStack {
             ZStack {
-                let scale = magScale
-                let displaySize = iconSize * scale
                 let cellW = isVertical ? iconSize : max(iconSize, displaySize)
                 let cellH = isVertical ? max(iconSize, displaySize) : iconSize
                 Color.clear
                     .frame(width: cellW, height: cellH)
                     .overlay(alignment: .center) {
-                        // High-quality native-style magnification for running apps (same as pinned items).
                         let baseIcon = Image(nsImage: entry.icon)
                             .resizable()
                             .interpolation(.high)
                             .frame(width: displaySize, height: displaySize)
-
-                        let accent = Color(nsColor: NSColor.controlAccentColor)
 
                         baseIcon
                             .shadow(color: Color.black.opacity(0.22 + (magScale - 1) * 0.12), radius: 5 + (magScale - 1) * 5, x: 0, y: 2 + (magScale - 1) * 2)
@@ -1234,9 +1241,14 @@ struct RunningAppTileView: View {
                 }
             }
         }
-        .frame(width: isVertical ? iconSize : nil, height: isVertical ? nil : iconSize, alignment: .center)
+        .frame(width: isVertical ? iconSize : max(iconSize, displaySize),
+               height: isVertical ? max(iconSize, displaySize) : iconSize,
+               alignment: .center)
         .contentShape(Rectangle())
-        .onTapGesture { RunningAppsMonitor.shared.activate(entry) }
+        .onTapGesture {
+            print("[Recent Tap] \(entry.name) pid=\(entry.pid) path=\(entry.path)")
+            RunningAppsMonitor.shared.activate(entry)
+        }
         .help(prefs.labelMode == .tooltip ? "" : entry.name)
     }
 }
@@ -2099,25 +2111,34 @@ struct FolderIconView: View {
 
     var body: some View {
         ZStack {
-            RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.primary.opacity(0.18))
+            // Bubble is inset slightly so its visual size matches neighboring app icons
+            // (plain icons don't fill their full cell with a solid container).
+            let bubbleSize = size * 0.86
+            let bubbleCorner = bubbleSize * 0.24
+
+            RoundedRectangle(cornerRadius: bubbleCorner, style: .continuous)
+                .fill(Color.primary.opacity(0.15))
+                .frame(width: bubbleSize, height: bubbleSize)
                 .overlay(
-                    RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.22), lineWidth: 0.5)
+                    RoundedRectangle(cornerRadius: bubbleCorner, style: .continuous)
+                        .strokeBorder(Color.primary.opacity(0.24), lineWidth: 0.6)
                 )
 
             let grid = Array(folder.apps.prefix(9))
-            let cell = (size - 18) / 3
-            VStack(spacing: 3) {
+            let gridPadding = bubbleSize * 0.11
+            let gridSpacing: CGFloat = bubbleSize * 0.055
+            let cell = (bubbleSize - gridPadding * 2 - gridSpacing * 2) / 3
+
+            VStack(spacing: gridSpacing) {
                 ForEach(0..<3, id: \.self) { row in
-                    HStack(spacing: 3) {
+                    HStack(spacing: gridSpacing) {
                         ForEach(0..<3, id: \.self) { col in
                             let idx = row * 3 + col
                             if idx < grid.count {
                                 Image(nsImage: grid[idx].icon)
                                     .resizable()
                                     .frame(width: cell, height: cell)
-                                    .cornerRadius(4)
+                                    .cornerRadius(max(3, cell * 0.22))
                             } else {
                                 Color.clear.frame(width: cell, height: cell)
                             }
@@ -2125,7 +2146,8 @@ struct FolderIconView: View {
                     }
                 }
             }
-            .padding(7)
+            .frame(width: bubbleSize, height: bubbleSize)
+            .padding(gridPadding)
         }
         .frame(width: size, height: size)
     }
@@ -2555,7 +2577,7 @@ final class DockTooltipPanel {
         let contentLeftScreenX = dockF.minX
         let icX = contentLeftScreenX + itemFrame.midX
         let icY = contentTopScreenY - itemFrame.midY
-        let gap: CGFloat = 5.5  // extra clearance when icon below has Liquid Glass halo + to avoid distortion
+        let gap: CGFloat = 20.0  // doubled to 20px margin between tooltip arrow tip and icon top
 
         let pw = total.width
         let ph = total.height

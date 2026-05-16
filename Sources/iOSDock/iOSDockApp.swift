@@ -111,13 +111,22 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.rebuildStatusItemMenu()
         }
 
-        // Open Settings window on first launch and force the dock(s) visible + disable auto-hide
-        // so the user definitely sees the dock at the bottom alongside settings.
+        // First-launch onboarding: auto-open Settings + force dock visible (so user sees
+        // the replacement dock next to settings on day one). Guarded so this only happens
+        // for real first launches by end-users.
+        // - If running from DerivedData (all dev builds/relaunches): never auto-open.
+        // - Else if our "didFirstLaunch" sentinel not set: open Settings, set sentinel.
+        // Uses Apple-native UserDefaults + Bundle path check. Survives rebuilds, clean DerivedData,
+        // and ensures zero Settings popups during iteration while preserving real-user UX.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
-            self.openSettings()
-            for dw in self.dockWindows {
-                dw.prefs.autoHideDock = false
-                dw.forceReveal()
+            if !Self.isDeveloperBuild(),
+               !UserDefaults.standard.bool(forKey: "FocusDock.didCompleteFirstLaunch") {
+                UserDefaults.standard.set(true, forKey: "FocusDock.didCompleteFirstLaunch")
+                self.openSettings()
+                for dw in self.dockWindows {
+                    dw.prefs.autoHideDock = false
+                    dw.forceReveal()
+                }
             }
         }
     }
@@ -387,28 +396,6 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
     }
 
-    private func promptHideSystemDockIfNeeded() {
-        let askedKey = "didPromptHideDock"
-        if UserDefaults.standard.bool(forKey: askedKey) { return }
-        UserDefaults.standard.set(true, forKey: askedKey)
-
-        let alert = NSAlert()
-        alert.messageText = "Take over the macOS Dock?"
-        alert.informativeText = """
-        Focus: Dock works as a replacement dock that supports iOS-style folder creation.
-
-        It will hide the system Dock while running and automatically restore it when you Quit or uninstall the app.
-
-        Hide the system Dock now?
-        """
-        alert.addButton(withTitle: "Hide System Dock")
-        alert.addButton(withTitle: "Not now")
-        let response = alert.runModal()
-        if response == .alertFirstButtonReturn {
-            SystemDockManager.hideSystemDock()
-        }
-    }
-
     @objc func openSettings() {
         NSApp.activate(ignoringOtherApps: true)
         // Try every known selector across macOS versions.
@@ -432,6 +419,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         }
         // Last resort: open the Settings scene by creating it explicitly.
         SettingsWindowFallback.show()
+    }
+
+    /// Returns true when this binary lives inside an Xcode DerivedData tree.
+    /// All developer builds (xcodebuild, Xcode Run, clean builds) use this path.
+    /// Production installs (DMG, /Applications, App Store) never contain "DerivedData".
+    /// Used to suppress first-launch Settings popup (and similar dev friction) while
+    /// preserving the intended UX for real users on their first run.
+    private static func isDeveloperBuild() -> Bool {
+        Bundle.main.bundlePath.contains("DerivedData")
     }
 
     static func makeSettingsWindowResizable() {

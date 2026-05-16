@@ -15,22 +15,19 @@ import ApplicationServices
 /// `AXLabel`/`AXSubrole`). This is the same approach used by every
 /// third-party dock replacement on the Mac.
 ///
-/// **Permission UX:** the first time we run we call `AXIsProcessTrustedWithOptions`
-/// with the prompt option set, which surfaces the macOS system "Allow
-/// Accessibility access" dialog. If the user denies, badges silently stay
-/// empty — the rest of the dock works unchanged. We re-check on every poll
-/// in case the user grants access later.
+/// **Permission UX:** We only show the system Accessibility prompt *once ever*
+/// (stored in UserDefaults). After that we use the silent `AXIsProcessTrusted()`
+/// check. The user can manually re-request permission from Settings if needed.
+/// If permission is denied, badges and minimized windows simply stay hidden.
 final class BadgeMonitor {
     static let shared = BadgeMonitor()
 
     private var timer: Timer?
     private let pollInterval: TimeInterval = 2.0
-    private var hasPromptedForAX = false
+    private let hasPromptedKey = "FocusDock.hasEverRequestedAccessibility"
 
     func start() {
         stop()
-        // Kick once immediately so a freshly-granted permission shows badges
-        // without waiting a full poll cycle.
         tick()
         let t = Timer.scheduledTimer(withTimeInterval: pollInterval, repeats: true) { [weak self] _ in
             self?.tick()
@@ -44,19 +41,32 @@ final class BadgeMonitor {
         timer = nil
     }
 
+    /// Call this from Settings if the user wants to manually grant/refresh Accessibility permission.
+    static func requestAccessibilityPermission() {
+        let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
+        _ = AXIsProcessTrustedWithOptions(opts)
+    }
+
+    private var hasEverRequestedAccessibility: Bool {
+        get { UserDefaults.standard.bool(forKey: hasPromptedKey) }
+        set { UserDefaults.standard.set(newValue, forKey: hasPromptedKey) }
+    }
+
     private func tick() {
-        // Prompt for AX once — subsequent ticks just check trust silently.
         let trusted: Bool
-        if !hasPromptedForAX {
-            hasPromptedForAX = true
+
+        if !hasEverRequestedAccessibility {
+            // First time ever — show the system prompt dialog.
+            hasEverRequestedAccessibility = true
             let opts = [kAXTrustedCheckOptionPrompt.takeUnretainedValue() as String: true] as CFDictionary
             trusted = AXIsProcessTrustedWithOptions(opts)
         } else {
+            // Subsequent launches / polls: silent check only. No more spam.
             trusted = AXIsProcessTrusted()
         }
+
         guard trusted else { return }
 
-        // Read off the main thread; publish back on main.
         DispatchQueue.global(qos: .utility).async {
             let snapshot = Self.readDockBadges()
             DispatchQueue.main.async {
