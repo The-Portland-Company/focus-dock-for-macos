@@ -77,6 +77,7 @@ enum ProfileKeys {
         "edgeOffset", "showFinder", "showTrash",
         "autoHideDock", "bounceOnLaunch",
         "showRunningIndicators", "showRecentApps",
+        "openAppVisualStyle",
         "fillWidth", "paddingUniform", "dockScale",
         "isPlaced"
     ]
