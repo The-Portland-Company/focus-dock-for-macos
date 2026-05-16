@@ -18,24 +18,29 @@ struct ProfilesTab: View {
 
     private var header: some View {
         VStack(alignment: .leading, spacing: 6) {
-            Text("Profiles").font(.title3).bold()
+            Text("Profiles & Docks").font(.title3).bold()
             Text("A profile is a named group of docks. Each dock has its own pinned apps, screen, and visual settings. Switch profiles from the menu bar — every dock in the active profile appears at once.")
                 .foregroundStyle(.secondary).font(.callout)
                 .fixedSize(horizontal: false, vertical: true)
         }
     }
 
+    @State private var isEditingDocks = Preferences.shared.isEditingDocks
+
     @ViewBuilder
     private var profilesList: some View {
         ScrollView {
             VStack(alignment: .leading, spacing: 8) {
                 ForEach(mgr.profiles) { p in
-                    ProfileRow(profile: p)
+                    ProfileRow(profile: p, isEditingDocks: isEditingDocks)
                 }
             }
         }
         .frame(minHeight: 280)
         .background(RoundedRectangle(cornerRadius: 6).fill(Color.secondary.opacity(0.06)))
+        .onReceive(NotificationCenter.default.publisher(for: Preferences.changed)) { _ in
+            isEditingDocks = Preferences.shared.isEditingDocks
+        }
     }
 
     private var profileButtonRow: some View {
@@ -45,13 +50,23 @@ struct ProfilesTab: View {
                     _ = mgr.addProfile(name: n)
                 }
             } label: { Label("New profile", systemImage: "plus") }
+
             Button {
                 let src = mgr.activeProfile
                 if let n = Prompt.string(title: "Duplicate Profile", defaultValue: src.name + " Copy") {
                     _ = mgr.addProfile(name: n, duplicateFrom: src.id)
                 }
             } label: { Label("Duplicate", systemImage: "plus.square.on.square") }
+
             Spacer()
+
+            // Edit Docks mode toggle — when on, every visible dock shows a red X in the top center for easy deletion.
+            Button {
+                Preferences.shared.isEditingDocks.toggle()
+            } label: {
+                Label(isEditingDocks ? "Done" : "Edit", systemImage: isEditingDocks ? "checkmark" : "pencil")
+            }
+            .foregroundStyle(isEditingDocks ? Color.green : Color.accentColor)
         }
     }
 
@@ -78,6 +93,7 @@ struct ProfilesTab: View {
 
 private struct ProfileRow: View {
     let profile: Profile
+    let isEditingDocks: Bool
     @ObservedObject private var mgr = ProfileManager.shared
     @State private var renaming: Bool = false
     @State private var rename: String = ""
@@ -110,6 +126,9 @@ private struct ProfileRow: View {
                     Button("Add Dock…") {
                         if let n = Prompt.string(title: "Add Dock", defaultValue: "New Dock") {
                             _ = mgr.addDock(name: n, in: profile.id)
+                            if !Preferences.shared.isEditingLayout {
+                                Preferences.shared.isEditingLayout = true
+                            }
                         }
                     }
                     Divider()
@@ -131,7 +150,7 @@ private struct ProfileRow: View {
             }
             ForEach(profile.dockIDs, id: \.self) { dockID in
                 if let dock = mgr.dock(id: dockID) {
-                    DockRow(dock: dock, parentProfile: profile)
+                    DockRow(dock: dock, parentProfile: profile, isEditingDocks: isEditingDocks)
                         .padding(.leading, 22)
                 }
             }
@@ -139,6 +158,10 @@ private struct ProfileRow: View {
                 Button {
                     if let n = Prompt.string(title: "Add Dock", defaultValue: "New Dock") {
                         _ = mgr.addDock(name: n, in: profile.id)
+                        // Auto-enable Edit Layout so the new centered floating dock can be dragged immediately.
+                        if !Preferences.shared.isEditingLayout {
+                            Preferences.shared.isEditingLayout = true
+                        }
                     }
                 } label: { Label("Add Dock", systemImage: "plus.rectangle.on.rectangle") }
                 .buttonStyle(.borderless)
@@ -158,6 +181,7 @@ private struct ProfileRow: View {
 private struct DockRow: View {
     let dock: DockInstance
     let parentProfile: Profile
+    let isEditingDocks: Bool
     @ObservedObject private var mgr = ProfileManager.shared
     @State private var renaming: Bool = false
     @State private var rename: String = ""

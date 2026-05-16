@@ -15,7 +15,9 @@ final class Preferences: ObservableObject {
     private let kDockIcon = "showDockIcon"
     private let kMenuBar = "showMenuBarIcon"
     private let kEdge = "dockEdge"
+    private let kIsPlaced = "isPlaced"
     private let kEditing = "isEditingLayout"
+    private let kEditingDocks = "isEditingDocks"
     private let kIconSize = "iconSize"
     private let kSpacing = "spacing"
     private let kMagnify = "magnifyOnHover"
@@ -86,7 +88,7 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: pk(kBounce)) == nil { defaults.set(true, forKey: pk(kBounce)) }
         if defaults.object(forKey: pk(kRunningDots)) == nil { defaults.set(true, forKey: pk(kRunningDots)) }
         if defaults.object(forKey: pk(kShowRecents)) == nil { defaults.set(false, forKey: pk(kShowRecents)) }
-        if defaults.object(forKey: pk(kFillWidth)) == nil { defaults.set(false, forKey: pk(kFillWidth)) }
+        if defaults.object(forKey: pk(kFillWidth)) == nil { defaults.set(true, forKey: pk(kFillWidth)) }
         if defaults.object(forKey: pk(kPaddingUniform)) == nil { defaults.set(false, forKey: pk(kPaddingUniform)) }
         if defaults.object(forKey: pk(kDockScale)) == nil { defaults.set(1.0, forKey: pk(kDockScale)) }
         // Reset transient edit-layout flag every launch (always global).
@@ -149,7 +151,7 @@ final class Preferences: ObservableObject {
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
         .edgeOffset: 8.0, .showFinder: true, .showTrash: true,
         .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .showRecentApps: false,
-        .fillWidth: false, .paddingUniform: false,
+        .fillWidth: true, .paddingUniform: false,
         .dockScale: 1.0
     ]
 
@@ -332,6 +334,21 @@ final class Preferences: ObservableObject {
         }
     }
 
+    /// Whether this dock has been dragged to a screen edge at least once.
+    /// New docks start as `false` so they appear floating in the center with
+    /// a prominent "drag to edge to activate" prompt.
+    var isPlaced: Bool {
+        get {
+            if defaults.object(forKey: pk(kIsPlaced)) == nil { return true } // legacy docks
+            return defaults.bool(forKey: pk(kIsPlaced))
+        }
+        set {
+            defaults.set(newValue, forKey: pk(kIsPlaced))
+            _tick &+= 1
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+        }
+    }
+
     var iconSize: Double {
         get { defaults.double(forKey: pk(kIconSize)) }
         set { defaults.set(newValue, forKey: pk(kIconSize)); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
@@ -371,6 +388,18 @@ final class Preferences: ObservableObject {
         get { defaults.bool(forKey: kEditing) }
         set {
             defaults.set(newValue, forKey: kEditing)
+            _tick &+= 1
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+        }
+    }
+
+    /// Global "Edit Docks" mode — when enabled, each dock shows a prominent
+    /// delete (X / trash) button in the top center so the user can remove docks
+    /// directly from the visual representation.
+    var isEditingDocks: Bool {
+        get { defaults.bool(forKey: kEditingDocks) }
+        set {
+            defaults.set(newValue, forKey: kEditingDocks)
             _tick &+= 1
             NotificationCenter.default.post(name: Self.changed, object: nil)
         }

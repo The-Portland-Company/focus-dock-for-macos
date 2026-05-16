@@ -26,6 +26,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     var statusItem: NSStatusItem?
     private var prefsObserver: NSObjectProtocol?
     private var profilesObserver: NSObjectProtocol?
+    private var editModeOverlayWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
         NotificationCenter.default.addObserver(
@@ -91,6 +92,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ) { [weak self] _ in
             self?.applyPresentationMode()
             self?.installStatusItemIfNeeded()
+            self?.updateEditModeOverlay()
         }
 
         profilesObserver = NotificationCenter.default.addObserver(
@@ -155,10 +157,15 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if Preferences.shared.showMenuBarIcon {
             if statusItem == nil {
                 let item = NSStatusBar.system.statusItem(withLength: NSStatusItem.variableLength)
+
                 if let button = item.button {
                     button.image = NSImage(systemSymbolName: "square.grid.2x2.fill", accessibilityDescription: "Focus: Dock")
+                    button.target = self
+                    button.action = #selector(statusItemClicked(_:))
+                    // We handle left vs right click manually for reliable behavior
+                    button.sendAction(on: [.leftMouseUp, .rightMouseUp])
                 }
-                item.menu = buildStatusMenu()
+
                 statusItem = item
             }
         } else if let item = statusItem {
@@ -169,67 +176,40 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildStatusMenu() -> NSMenu {
         let menu = NSMenu()
-        menu.addItem(withTitle: "Show Dock", action: #selector(showDock), keyEquivalent: "d").target = self
-        let editItem = NSMenuItem(title: "Edit Layout (drag dock to an edge)", action: #selector(toggleEditLayout), keyEquivalent: "e")
-        editItem.target = self
-        editItem.state = Preferences.shared.isEditingLayout ? .on : .off
-        menu.addItem(editItem)
 
-        menu.addItem(.separator())
-
-        // Profiles submenu
-        let profilesItem = NSMenuItem(title: "Profile", action: nil, keyEquivalent: "")
-        let sub = NSMenu(title: "Profile")
-        let mgr = ProfileManager.shared
-        for p in mgr.profiles {
-            let mi = NSMenuItem(title: p.name, action: #selector(selectProfile(_:)), keyEquivalent: "")
-            mi.target = self
-            mi.representedObject = p.id.uuidString
-            mi.state = (p.id == mgr.activeProfileID) ? .on : .off
-            sub.addItem(mi)
-        }
-        sub.addItem(.separator())
-        sub.addItem(withTitle: "New Profile…", action: #selector(newProfile), keyEquivalent: "").target = self
-        sub.addItem(withTitle: "Duplicate Current Profile…", action: #selector(duplicateProfile), keyEquivalent: "").target = self
-        sub.addItem(withTitle: "Rename Current Profile…", action: #selector(renameProfile), keyEquivalent: "").target = self
-        let del = NSMenuItem(title: "Delete Current Profile", action: #selector(deleteProfile), keyEquivalent: "")
-        del.target = self
-        del.isEnabled = mgr.profiles.count > 1
-        sub.addItem(del)
-        profilesItem.submenu = sub
-        menu.addItem(profilesItem)
-
-        // Docks submenu (members of the active profile)
-        let docksItem = NSMenuItem(title: "Docks", action: nil, keyEquivalent: "")
-        let docksMenu = NSMenu(title: "Docks")
-        for dockID in mgr.activeProfile.dockIDs {
-            if let dock = mgr.dock(id: dockID) {
-                let title = "\(dock.name) — \(dock.screen.label)"
-                let mi = NSMenuItem(title: title, action: #selector(selectEditingDock(_:)), keyEquivalent: "")
-                mi.target = self
-                mi.representedObject = dock.id.uuidString
-                mi.state = (dock.id == mgr.editingDockID) ? .on : .off
-                docksMenu.addItem(mi)
-            }
-        }
-        docksMenu.addItem(.separator())
-        docksMenu.addItem(withTitle: "Add Dock to Active Profile…", action: #selector(addDockToActive), keyEquivalent: "").target = self
-        let remove = NSMenuItem(title: "Remove Editing Dock", action: #selector(removeEditingDock), keyEquivalent: "")
-        remove.target = self
-        remove.isEnabled = mgr.activeProfile.dockIDs.count > 1
-        docksMenu.addItem(remove)
-        docksItem.submenu = docksMenu
-        menu.addItem(docksItem)
-
-        menu.addItem(.separator())
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Focus: Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+
         return menu
     }
 
     private func rebuildStatusItemMenu() {
-        statusItem?.menu = buildStatusMenu()
+        // We no longer use item.menu for the primary behavior.
+        // Click handling is done manually in statusItemClicked.
+    }
+
+    @objc func statusItemClicked(_ sender: NSStatusBarButton) {
+        guard let event = NSApp.currentEvent else {
+            openSettings()
+            return
+        }
+
+        // Right-click or Control-click → show Quit menu
+        if event.type == .rightMouseUp || event.modifierFlags.contains(.control) {
+            if let statusItem = statusItem {
+                statusItem.popUpMenu(buildMinimalQuitMenu())
+            }
+        } else {
+            // Normal left-click → open Settings directly
+            openSettings()
+        }
+    }
+
+    private func buildMinimalQuitMenu() -> NSMenu {
+        let menu = NSMenu()
+        menu.addItem(withTitle: "Quit Focus: Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
+        return menu
     }
 
     @objc func selectEditingDock(_ sender: NSMenuItem) {
@@ -237,26 +217,21 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         ProfileManager.shared.setEditingDock(uuid)
     }
 
+
+
     @objc func addDockToActive() {
         let mgr = ProfileManager.shared
         guard let name = promptForString(title: "Add Dock", message: "Name for the new dock:", defaultValue: "New Dock") else { return }
         _ = mgr.addDock(name: name, in: mgr.activeProfileID)
-    }
 
-    @objc func removeEditingDock() {
-        let mgr = ProfileManager.shared
-        guard mgr.activeProfile.dockIDs.count > 1 else { return }
-        guard let dock = mgr.dock(id: mgr.editingDockID) else { return }
-        let alert = NSAlert()
-        alert.messageText = "Remove dock \"\(dock.name)\"?"
-        alert.informativeText = "This removes its pinned apps and settings. This cannot be undone."
-        alert.alertStyle = .warning
-        alert.addButton(withTitle: "Remove")
-        alert.addButton(withTitle: "Cancel")
-        if alert.runModal() == .alertFirstButtonReturn {
-            mgr.removeDock(dock.id)
+        // Make the new floating dock immediately draggable so the user can
+        // snap it to an edge right away (matches the "center floating with prompt" UX).
+        if !Preferences.shared.isEditingLayout {
+            Preferences.shared.isEditingLayout = true
         }
     }
+
+
 
     @objc func selectProfile(_ sender: NSMenuItem) {
         guard let s = sender.representedObject as? String, let uuid = UUID(uuidString: s) else { return }
@@ -493,5 +468,45 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         DispatchQueue.main.async(execute: apply)
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.3, execute: apply)
         DispatchQueue.main.asyncAfter(deadline: .now() + 1.0, execute: apply)
+    }
+
+    // MARK: - Edit Layout global overlay
+
+    private func updateEditModeOverlay() {
+        let isEditing = Preferences.shared.isEditingLayout
+
+        if isEditing {
+            showEditModeOverlay()
+        } else {
+            hideEditModeOverlay()
+        }
+    }
+
+    private func showEditModeOverlay() {
+        if editModeOverlayWindow != nil { return }
+
+        guard let screen = NSScreen.main else { return }
+
+        let overlay = NSWindow(
+            contentRect: screen.frame,
+            styleMask: [.borderless],
+            backing: .buffered,
+            defer: false
+        )
+        overlay.backgroundColor = NSColor.black.withAlphaComponent(0.18)
+        overlay.isOpaque = false
+        overlay.hasShadow = false
+        overlay.level = .floating
+        overlay.ignoresMouseEvents = true
+        overlay.collectionBehavior = [.canJoinAllSpaces, .stationary, .fullScreenAuxiliary]
+        overlay.setFrame(screen.frame, display: true)
+        overlay.orderFrontRegardless()
+
+        editModeOverlayWindow = overlay
+    }
+
+    private func hideEditModeOverlay() {
+        editModeOverlayWindow?.orderOut(nil)
+        editModeOverlayWindow = nil
     }
 }

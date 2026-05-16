@@ -33,7 +33,7 @@ struct SettingsView: View {
                     .tabItem { Label("Apps", systemImage: "square.grid.2x2") }
                     .tag(SettingsTab.apps)
                 ProfilesTab()
-                    .tabItem { Label("Profiles", systemImage: "person.2.circle") }
+                    .tabItem { Label("Profiles & Docks", systemImage: "person.2.circle") }
                     .tag(SettingsTab.profiles)
             }
             .padding()

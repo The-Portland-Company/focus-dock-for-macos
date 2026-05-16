@@ -37,6 +37,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     private var runningAppsSubscription: Any?
     private var snapWorkItem: DispatchWorkItem?
     private var cancellables: Set<AnyCancellable> = []
+    private var escapeMonitor: Any?
 
     // Auto-hide state. `shownFrame` is the laid-out frame as if the dock were
     // visible; the window itself may be parked at `hiddenFrame(for:)` instead.
@@ -76,6 +77,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let content = DockView()
             .environmentObject(library)
             .environmentObject(prefs)
+            .environment(\.dockID, dockID)
         let host = DockHostingController(rootView: content)
 
         let win = NSPanel(
@@ -100,7 +102,10 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         // own per-dock prefs, so other docks' edits don't actually move us).
         prefsObserver = NotificationCenter.default.addObserver(
             forName: Preferences.changed, object: nil, queue: .main
-        ) { [weak self] _ in self?.applyLayout() }
+        ) { [weak self] _ in
+            self?.applyLayout()
+            self?.updateEscapeMonitor()
+        }
         // Re-layout when our own items change (other dock instances' changes
         // are filtered out by dockID match in AppLibrary itself).
         library.objectWillChange.sink { [weak self] _ in
@@ -114,6 +119,21 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         screenObserver = NotificationCenter.default.addObserver(
             forName: NSApplication.didChangeScreenParametersNotification, object: nil, queue: .main
         ) { [weak self] _ in self?.applyLayout() }
+
+        // For freshly created unplaced ("New Dock") windows, force them in front
+        // of the Settings window so the user immediately sees the header + X
+        // and knows they have a draggable floating bar to place.
+        if !prefs.isPlaced {
+            DispatchQueue.main.asyncAfter(deadline: .now() + 0.10) { [weak self] in
+                guard let w = self?.window else { return }
+                w.orderFrontRegardless()
+                w.makeKey()
+                NSApp.activate(ignoringOtherApps: true)
+            }
+        }
+
+        updateEscapeMonitor()
+
         // Re-run layout when the minimized-window list changes so the dock
         // grows/shrinks to accommodate new tiles.
         minimizedSubscription = MinimizedMonitor.shared.$windows.sink { [weak self] _ in
@@ -136,16 +156,44 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
     /// Compute the proper window size and origin for the configured edge.
     func applyLayout() {
         guard let win = window, let screen = activeScreen else { return }
+
+        // --- Unplaced / "New Dock" floating preview state ---
+        if !prefs.isPlaced {
+            win.isMovableByWindowBackground = true
+            win.isMovable = true
+
+            let previewW: CGFloat = max(520, min(680, screen.frame.width * 0.42))
+            let previewH: CGFloat = 105
+            let x = screen.frame.midX - previewW / 2
+            let y = screen.frame.midY - previewH / 2 + 30
+            let floating = NSRect(x: x, y: y, width: previewW, height: previewH)
+
+            shownFrame = floating
+            win.setFrame(floating, display: true, animate: false)
+            return
+        }
+
         let edge = self.prefs.edge
         let isEditing = self.prefs.isEditingLayout
         win.isMovableByWindowBackground = isEditing
         win.isMovable = isEditing
 
         let prefs = self.prefs
-        // Flush works on any edge now — uses full screen.frame and ignores
-        // edgeOffset on that edge. (Pref key kept as "flushBottom" for storage.)
         let useFlush = prefs.flushBottom
         let area: NSRect = useFlush ? screen.frame : screen.visibleFrame
+
+        // If the user dismissed the "New Dock" prompt with X (without dragging
+        // to an edge), keep the current centered position.
+        let currentCenter = CGPoint(x: win.frame.midX, y: win.frame.midY)
+        let dBottom = abs(currentCenter.y - area.minY)
+        let dTop    = abs(area.maxY - currentCenter.y)
+        let dLeft   = abs(currentCenter.x - area.minX)
+        let dRight  = abs(area.maxX - currentCenter.x)
+        if min(dBottom, dTop, dLeft, dRight) > 100 {
+            shownFrame = win.frame
+            win.setFrame(win.frame, display: true, animate: false)
+            return
+        }
 
         let pt = CGFloat(prefs.effectivePaddingTop), pb = CGFloat(prefs.effectivePaddingBottom)
         let pl = CGFloat(prefs.effectivePaddingLeft), pr = CGFloat(prefs.effectivePaddingRight)
@@ -159,18 +207,16 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let iconSize = CGFloat(prefs.effectiveIconSize)
         let spacing = CGFloat(prefs.effectiveSpacing)
         let isVerticalEdge = (edge == .left || edge == .right)
-        let perpInside = CGFloat(isVerticalEdge ? prefs.effectivePaddingLeft + prefs.effectivePaddingRight : prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
-        let perpAlongAxis = CGFloat(isVerticalEdge ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
+        let perpInside = CGFloat(isVerticalEdge ? prefs.effectivePaddingLeft + prefs.effectivePaddingRight : prefs.effectivePaddingTop + prefs.effectivePaddingBottom)
+        let alongPaddingSum: CGFloat = isVerticalEdge
+            ? CGFloat(prefs.effectivePaddingTop + prefs.effectivePaddingBottom)
+            : CGFloat(prefs.effectivePaddingLeft + prefs.effectivePaddingRight)
         let totalIcons = CGFloat(count) * iconSize + CGFloat(max(0, count - 1)) * spacing
 
         // The icons may be compressed to fit; the *effective* icon size is what
         // actually appears on screen. Dock thickness is derived from the effective
         // size so the slider value doesn't grow the dock past what's visible.
-        let maxAlong: CGFloat
-        switch edge {
-        case .bottom, .top: maxAlong = area.width - 16 - perpAlongAxis
-        case .left, .right: maxAlong = area.height - 16 - perpAlongAxis
-        }
+        let maxAlong = (isVerticalEdge ? area.height : area.width) - alongPaddingSum
         let desiredAlong = totalIcons
         let alongScale: CGFloat = desiredAlong <= maxAlong ? 1 : max(0.4, maxAlong / desiredAlong)
         let effectiveIcon = iconSize * alongScale
@@ -181,7 +227,6 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let thicknessVertical = max(magnified, effectiveIcon) + pl + pr + 8
         _ = perpInside // silence unused warning if not referenced below
 
-        let screenBuffer: CGFloat = 16
         // Flush "bleed": when flush-with-edge is on we extend the window a few
         // points past the screen edge in the perpendicular axis so the dock
         // chrome (which is anchored to that edge via the SwiftUI ZStack) covers
@@ -197,29 +242,30 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         // the icon overlaps the corner and the dock visually "goes square"
         // at the hovered end.
         let alongHeadroom: CGFloat = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - effectiveIcon) : 0
+
+        // The user's Left/Right (or Top/Bottom for vertical docks) padding
+        // settings are the *only* source of side margin. No hard-coded buffer.
+        let maxLen = (isVerticalEdge ? area.height : area.width) - alongPaddingSum
+
         let frame: NSRect
         switch edge {
         case .bottom:
             let desired = totalIcons + pl + pr + alongHeadroom
-            let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let y = useFlush ? area.minY - bleed : area.minY + offset
             frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal + bleed)
         case .top:
             let desired = totalIcons + pl + pr + alongHeadroom
-            let maxLen = area.width - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let y = useFlush ? area.maxY - thicknessHorizontal : area.maxY - thicknessHorizontal - offset
             frame = NSRect(x: area.midX - length / 2, y: y, width: length, height: thicknessHorizontal + bleed)
         case .left:
             let desired = totalIcons + pt + pb + alongHeadroom
-            let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let x = useFlush ? area.minX - bleed : area.minX + offset
             frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical + bleed, height: length)
         case .right:
             let desired = totalIcons + pt + pb + alongHeadroom
-            let maxLen = area.height - screenBuffer
             let length = prefs.fillWidth ? maxLen : min(max(desired, 240), maxLen)
             let x = useFlush ? area.maxX - thicknessVertical : area.maxX - thicknessVertical - offset
             frame = NSRect(x: x, y: area.midY - length / 2, width: thicknessVertical + bleed, height: length)
@@ -366,13 +412,38 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
                 minDist == dTop ? .top :
                 minDist == dLeft ? .left : .right
             if newEdge != self.prefs.edge {
-                self.prefs.edge = newEdge // triggers applyLayout via observer
-            } else {
-                self.applyLayout()
+                self.prefs.edge = newEdge
             }
+            if !self.prefs.isPlaced {
+                self.prefs.isPlaced = true   // First snap "activates" the dock
+            }
+            self.applyLayout()   // always refresh after a snap in edit mode
         }
         snapWorkItem = work
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.18, execute: work)
+    }
+
+    // MARK: - Escape key handling for Edit Layout mode
+
+    private func updateEscapeMonitor() {
+        // Remove any existing monitor
+        if let monitor = escapeMonitor {
+            NSEvent.removeMonitor(monitor)
+            escapeMonitor = nil
+        }
+
+        guard prefs.isEditingLayout else { return }
+
+        escapeMonitor = NSEvent.addLocalMonitorForEvents(matching: .keyDown) { [weak self] event in
+            guard let self = self else { return event }
+
+            // Escape key (keyCode 53)
+            if event.keyCode == 53 {
+                Preferences.shared.isEditingLayout = false
+                return nil // consume the event
+            }
+            return event
+        }
     }
 }
 
@@ -410,10 +481,14 @@ enum DockSlot: Identifiable {
 struct DockView: View {
     @EnvironmentObject var library: AppLibrary
     @EnvironmentObject var prefs: Preferences
+    @Environment(\.dockID) private var dockID: UUID?
+    @State private var isEditingDocks = Preferences.shared.isEditingDocks
+
     @StateObject private var dragState = DragState()
     @StateObject private var minimized = MinimizedMonitor.shared
     @StateObject private var runningApps = RunningAppsMonitor.shared
     @State private var hoverPoint: CGPoint? = nil
+    @State private var smoothedHoverPoint: CGPoint? = nil  // Low-pass filtered for buttery smooth magnification
 
     private var iconSize: CGFloat { CGFloat(prefs.effectiveIconSize) }
     private var spacing: CGFloat { CGFloat(prefs.effectiveSpacing) }
@@ -574,6 +649,30 @@ struct DockView: View {
                         height: isVertical ? nil : restingThickness
                     )
 
+                // Delete mode: big red X / trash in the top center of the dock
+                if isEditingDocks, let id = dockID {
+                    VStack {
+                        Button {
+                            // Remove this specific dock (with safety checks inside removeDock)
+                            ProfileManager.shared.removeDock(id)
+                        } label: {
+                            Image(systemName: "trash.circle.fill")
+                                .font(.system(size: 32, weight: .bold))
+                                .foregroundStyle(.white)
+                                .background(
+                                    Circle()
+                                        .fill(Color.red)
+                                        .frame(width: 38, height: 38)
+                                )
+                                .shadow(color: .black.opacity(0.4), radius: 4, y: 2)
+                        }
+                        .buttonStyle(.plain)
+                        .help("Delete this dock")
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: .top)
+                    .padding(.top, 4)
+                }
+
                 Group {
                     if isVertical {
                         VStack(spacing: scaledSpacing) { itemViews(iconSize: scaledIcon, spacing: scaledSpacing) }
@@ -594,28 +693,87 @@ struct DockView: View {
                         .padding(8)
                         .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: oppositeAlignment)
                 }
+
+                // Special "New / Unplaced" floating preview state.
+                // Thin header (drag handle + X) + small non-blocking instruction badge.
+                if !prefs.isPlaced {
+                    VStack(spacing: 0) {
+                        // Thin header bar — clear drag zone + X button
+                        HStack {
+                            Text("New Dock")
+                                .font(.system(size: 11, weight: .semibold, design: .rounded))
+                                .foregroundStyle(.white.opacity(0.85))
+
+                            Spacer()
+
+                            Button {
+                                prefs.isPlaced = true
+                            } label: {
+                                Image(systemName: "xmark.circle.fill")
+                                    .font(.system(size: 12, weight: .medium))
+                                    .foregroundStyle(.white)
+                            }
+                            .buttonStyle(.plain)
+                            .help("Dismiss instruction (dock stays floating)")
+                        }
+                        .padding(.horizontal, 8)
+                        .padding(.vertical, 3)
+                        .background(Color.black.opacity(0.22))
+
+                        Spacer(minLength: 6)
+
+                        // Small instruction badge (not covering the header)
+                        Text("Drag to any edge to activate")
+                            .font(.system(size: 9.5, weight: .medium, design: .rounded))
+                            .foregroundStyle(.white.opacity(0.9))
+                            .padding(.horizontal, 8)
+                            .padding(.vertical, 2)
+                            .background(Capsule().fill(Color.black.opacity(0.4)))
+                            .padding(.bottom, 6)
+                    }
+                    .frame(maxWidth: .infinity, maxHeight: .infinity)
+                    .background(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .fill(Color.black.opacity(0.08))
+                    )
+                    .overlay(
+                        RoundedRectangle(cornerRadius: 9, style: .continuous)
+                            .strokeBorder(Color.white.opacity(0.12), lineWidth: 1)
+                    )
+                }
             }
             .frame(width: proxy.size.width, height: proxy.size.height, alignment: dockAlignment)
         }
         .ignoresSafeArea()
+        .onReceive(NotificationCenter.default.publisher(for: Preferences.changed)) { _ in
+            isEditingDocks = Preferences.shared.isEditingDocks
+        }
         .coordinateSpace(name: "dock")
         .onContinuousHover(coordinateSpace: .named("dock")) { phase in
             switch phase {
             case .active(let p):
-                // Animate only the enter transition (nil → point) so icons
-                // spring up to magnified size on first hover. Subsequent
-                // continuous moves bypass the animation so the magnification
-                // tracks the cursor 1:1 without spring lag.
+                // Light exponential smoothing for buttery-smooth magnification (native-like feel)
+                let alpha: CGFloat = 0.22
+                if let current = smoothedHoverPoint {
+                    smoothedHoverPoint = CGPoint(
+                        x: current.x * (1 - alpha) + p.x * alpha,
+                        y: current.y * (1 - alpha) + p.y * alpha
+                    )
+                } else {
+                    smoothedHoverPoint = p
+                }
+
+                // Only spring on first enter for nice "pop"
                 if hoverPoint == nil {
-                    withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
-                        hoverPoint = p
+                    withAnimation(.spring(response: 0.2, dampingFraction: 0.82)) {
+                        hoverPoint = smoothedHoverPoint
                     }
                 } else {
-                    hoverPoint = p
+                    hoverPoint = smoothedHoverPoint
                 }
                 updateTooltipFor(point: p)
             case .ended:
-                // Animate the exit so icons spring back down smoothly.
+                smoothedHoverPoint = nil
                 withAnimation(.spring(response: 0.22, dampingFraction: 0.85)) {
                     hoverPoint = nil
                 }
@@ -623,7 +781,7 @@ struct DockView: View {
             }
         }
         .environmentObject(dragState)
-        .environment(\.dockHoverPoint, hoverPoint)
+        .environment(\.dockHoverPoint, smoothedHoverPoint ?? hoverPoint)
         .environment(\.dockIsVertical, isVertical)
         .environment(\.dockMagnifyEnabled, prefs.magnifyOnHover)
         .environment(\.dockMagnifyMax, magnifyMax)
@@ -696,9 +854,27 @@ struct MinimizedTileView: View {
     let iconSize: CGFloat
     let isVertical: Bool
 
+    @Environment(\.dockHoverPoint) private var hoverPoint
+    @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
+    @Environment(\.dockMagnifyMax) private var magnifyMax
+
+    private var magnificationScale: CGFloat {
+        guard magnifyEnabled, let hp = hoverPoint else { return 1 }
+        let mouse = isVertical ? hp.y : hp.x
+        let dist = abs(mouse - (isVertical ? 450 : 1350))
+        let sigma = iconSize * 2.0
+        let g = exp(-(dist * dist) / (2 * sigma * sigma))
+        let maxScale = max(1.0, magnifyMax / iconSize)
+        return 1 + (maxScale - 1) * g * 0.9
+    }
+
     var body: some View {
-        let cellW = isVertical ? iconSize : iconSize
-        let cellH = isVertical ? iconSize : iconSize
+        let scale = magnificationScale
+        let displaySize = iconSize * scale
+
+        let cellW = isVertical ? iconSize : max(iconSize, displaySize)
+        let cellH = isVertical ? iconSize : max(iconSize, displaySize)
+
         ZStack(alignment: .bottomTrailing) {
             // Preview thumbnail (rounded), with app icon fallback.
             RoundedRectangle(cornerRadius: iconSize * 0.18, style: .continuous)
@@ -724,12 +900,11 @@ struct MinimizedTileView: View {
                     .strokeBorder(Color.white.opacity(0.15), lineWidth: 0.5)
             )
 
-            // Small app-icon badge in the corner so the user knows which app
-            // the thumbnail belongs to — mirrors macOS Mission Control style.
+            // Small app-icon badge in the corner
             Image(nsImage: window.appIcon)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: iconSize * 0.42, height: iconSize * 0.42)
+                .frame(width: displaySize * 0.42, height: displaySize * 0.42)
                 .shadow(color: .black.opacity(0.35), radius: 1.5, x: 0, y: 1)
                 .offset(x: 2, y: 2)
         }
@@ -737,6 +912,7 @@ struct MinimizedTileView: View {
         .contentShape(Rectangle())
         .onTapGesture { MinimizedMonitor.shared.unminimize(window) }
         .help(window.title.isEmpty ? window.appName : window.title)
+        // Direct tracking via smoothed hoverPoint (no per-frame spring for responsiveness)
     }
 }
 
@@ -745,24 +921,47 @@ struct MinimizedTileView: View {
 struct RunningAppTileView: View {
     let entry: RunningAppEntry
     let iconSize: CGFloat
+
     @EnvironmentObject var prefs: Preferences
+    @Environment(\.dockHoverPoint) private var hoverPoint
+    @Environment(\.dockIsVertical) private var isVertical
+    @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
+    @Environment(\.dockMagnifyMax) private var magnifyMax
+
+    private var magnificationScale: CGFloat {
+        guard magnifyEnabled, let hp = hoverPoint else { return 1 }
+        // Running apps are usually at the end of the dock.
+        // We use a simple but effective distance-based scale.
+        let mouse = isVertical ? hp.y : hp.x
+        // Approximate center of this tile (we don't have exact index here,
+        // so we use a broad falloff that feels good for the recent section)
+        let dist = abs(mouse - (isVertical ? 400 : 1200)) // rough center bias for recent section
+        let sigma = iconSize * 2.2
+        let g = exp(-(dist * dist) / (2 * sigma * sigma))
+        let maxScale = max(1.0, magnifyMax / iconSize)
+        return 1 + (maxScale - 1) * g * 0.85   // slightly softer than main items
+    }
 
     var body: some View {
+        let scale = magnificationScale
+        let displaySize = iconSize * scale
+
         VStack(spacing: 4) {
             Image(nsImage: entry.icon)
                 .resizable()
                 .interpolation(.high)
-                .frame(width: iconSize, height: iconSize)
+                .frame(width: displaySize, height: displaySize)
             if prefs.showRunningIndicators {
                 Circle()
                     .fill(Color.primary.opacity(0.6))
-                    .frame(width: 4, height: 4)
+                    .frame(width: 4 * scale, height: 4 * scale)
             }
         }
-        .frame(width: iconSize, height: iconSize)
+        .frame(width: max(iconSize, displaySize), height: max(iconSize, displaySize))
         .contentShape(Rectangle())
         .onTapGesture { RunningAppsMonitor.shared.activate(entry) }
         .help(entry.name)
+        // Direct tracking via smoothed hoverPoint (no per-frame spring for responsiveness)
     }
 }
 
@@ -795,25 +994,36 @@ struct DockDivider: View {
 }
 
 private struct EditModePill: View {
+    @EnvironmentObject private var prefs: Preferences
     @State private var pulse = false
+
     var body: some View {
-        HStack(spacing: 6) {
-            Image(systemName: "arrow.up.and.down.and.arrow.left.and.right")
-                .font(.system(size: 11, weight: .semibold))
-            Text("Edit Layout")
-                .font(.system(size: 11, weight: .semibold, design: .rounded))
+        Button {
+            prefs.isEditingLayout = false
+        } label: {
+            HStack(spacing: 6) {
+                Image(systemName: "xmark")
+                    .font(.system(size: 10, weight: .bold))
+                Text("Exit Edit Layout")
+                    .font(.system(size: 11, weight: .semibold, design: .rounded))
+            }
+            .foregroundStyle(.white)
+            .padding(.horizontal, 12)
+            .padding(.vertical, 5)
+            .background(
+                Capsule(style: .continuous)
+                    .fill(Color.accentColor.opacity(0.95))
+                    .shadow(color: .black.opacity(0.3), radius: 5, x: 0, y: 2)
+            )
         }
-        .foregroundStyle(.white)
-        .padding(.horizontal, 10)
-        .padding(.vertical, 5)
-        .background(
-            Capsule(style: .continuous)
-                .fill(Color.accentColor)
-                .shadow(color: .black.opacity(0.25), radius: 4, x: 0, y: 1)
-        )
-        .opacity(pulse ? 1.0 : 0.7)
-        .onAppear { withAnimation(.easeInOut(duration: 0.9).repeatForever(autoreverses: true)) { pulse = true } }
-        .allowsHitTesting(false)
+        .buttonStyle(.plain)
+        .opacity(pulse ? 1.0 : 0.85)
+        .onAppear {
+            withAnimation(.easeInOut(duration: 0.85).repeatForever(autoreverses: true)) {
+                pulse = true
+            }
+        }
+        .help("Click to exit Edit Layout mode (or press Esc)")
     }
 }
 
@@ -824,6 +1034,7 @@ private struct DockIsVerticalKey: EnvironmentKey { static let defaultValue: Bool
 private struct DockMagnifyEnabledKey: EnvironmentKey { static let defaultValue: Bool = true }
 private struct DockMagnifyMaxKey: EnvironmentKey { static let defaultValue: CGFloat = 110 }
 private struct DockLeadingPadKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+private struct DockIDKey: EnvironmentKey { static let defaultValue: UUID? = nil }
 
 extension EnvironmentValues {
     var dockHoverPoint: CGPoint? {
@@ -845,6 +1056,11 @@ extension EnvironmentValues {
     var dockLeadingPad: CGFloat {
         get { self[DockLeadingPadKey.self] }
         set { self[DockLeadingPadKey.self] = newValue }
+    }
+
+    var dockID: UUID? {
+        get { self[DockIDKey.self] }
+        set { self[DockIDKey.self] = newValue }
     }
 }
 
@@ -952,7 +1168,8 @@ struct DockItemView: View {
                             .overlay(alignment: .topTrailing) {
                                 badgeOverlay(displaySize: displaySize)
                             }
-                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
+                            // No per-frame spring here — the smoothed hoverPoint in DockView + direct state update gives 1:1 responsive tracking.
+                            // Spring is only used on hover enter/exit in the parent for the "pop" feel.
                     }
                     // Badge anchored to the resting cell's top-right, NOT the
                     // magnified icon's, so it stays put when the icon grows
