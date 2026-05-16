@@ -1164,28 +1164,25 @@ struct RunningAppTileView: View {
             ZStack {
                 let scale = magScale
                 let displaySize = iconSize * scale
-                let magFactor = max(0, magScale - 1.0)
-                let perpExtra = magFactor * 4   // breathing room so glow doesn't get cutoff by neighbors
                 let cellW = isVertical ? iconSize : max(iconSize, displaySize)
-                let cellH = isVertical ? max(iconSize, displaySize) : iconSize + perpExtra
+                let cellH = isVertical ? max(iconSize, displaySize) : iconSize
                 Color.clear
                     .frame(width: cellW, height: cellH)
                     .overlay(alignment: .center) {
-                        // Continuous native Liquid Glass magnification for running apps.
-                        let magFactor = max(0, magScale - 1.0)
-                        let glassRadius = 4 + magFactor * 8
-                        let glassExtra = magFactor * 5
-
+                        // High-quality native-style magnification for running apps (same as pinned items).
                         let baseIcon = Image(nsImage: entry.icon)
                             .resizable()
                             .interpolation(.high)
                             .frame(width: displaySize, height: displaySize)
 
-                        LiquidGlassEffect(cornerRadius: glassRadius)
-                            .frame(width: displaySize + glassExtra, height: displaySize + glassExtra)
-                            .overlay(baseIcon)
+                        let accent = Color(nsColor: NSColor.controlAccentColor)
+
+                        baseIcon
+                            .shadow(color: accent.opacity(0.35), radius: 8 + (magScale - 1) * 12, x: 0, y: 2 + (magScale - 1) * 3)
+                            .shadow(color: Color.white.opacity(0.4), radius: 12 + (magScale - 1) * 14, x: 0, y: 3 + (magScale - 1) * 4)
+                            .offset(y: -(magScale - 1) * 1.5)
                             .activeGlow(isRunning: state.isRunning, isFrontmost: state.isFrontmost, style: prefs.indicatorStyle)
-                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: magScale)
+                            .animation(.spring(response: 0.18, dampingFraction: 0.78), value: magScale)
                     }
             }
             .trackItemFrame(id: entry.id)
@@ -1646,35 +1643,33 @@ struct DockItemView: View {
                 // overlapping them (matches macOS Dock magnification).
                 let scale = isDragging ? max(1.1, magScale) : (isHoverTarget ? 0.92 : magScale)
                 let displaySize = iconSize * scale
-                let magFactor = max(0, magScale - 1.0)
-                let perpExtra = magFactor * 4
                 let cellW = isDetached ? 0 : (isVertical ? iconSize : max(iconSize, displaySize))
-                let cellH = isDetached ? 0 : (isVertical ? max(iconSize, displaySize) : iconSize + perpExtra)
+                let cellH = isDetached ? 0 : (isVertical ? max(iconSize, displaySize) : iconSize)
                 Color.clear
                     .frame(width: cellW, height: cellH)
                     .overlay(alignment: .center) {
-                        // Native Liquid Glass magnification for strongly hovered icons.
-                        // Deleted all old custom shadow + manual lift code.
-                        // Continuous native Liquid Glass magnification.
-                        // Glass radius and halo grow smoothly with magScale — no hard threshold, no pop.
-                        let magFactor = max(0, magScale - 1.0)
-                        let glassRadius = 4 + magFactor * 8
-                        let glassExtra = magFactor * 5
-
-                        let plainIcon = iconContent(size: displaySize, includeGlow: false)
+                        // High-quality native-style icon magnification.
+                        // - Continuous scale via magScale (Gaussian falloff).
+                        // - Layout cell grows only along the dock axis (pushes neighbors).
+                        // - Clean accent-colored shadow + subtle inward lift for depth.
+                        // - No per-icon glass wrappers (caused centering, glow cutoff, tooltip issues).
+                        // - Glow applied here so it can extend outside the icon bounds.
+                        let plainIcon = iconContent(size: displaySize)
                             .frame(width: displaySize, height: displaySize)
                             .opacity(isDetached ? 0 : (isDragging ? 0.85 : 1.0))
 
-                        LiquidGlassEffect(cornerRadius: glassRadius)
-                            .frame(width: displaySize + glassExtra, height: displaySize + glassExtra)
-                            .overlay(plainIcon)
-                            // Glow on the outer glass container so it can extend without cutoff by neighbors.
+                        let accent = Color(nsColor: NSColor.controlAccentColor)
+
+                        plainIcon
+                            // Extra depth shadow that grows with magnification (on top of activeGlow).
+                            .shadow(color: accent.opacity(0.35), radius: 8 + (magScale - 1) * 12, x: 0, y: 2 + (magScale - 1) * 3)
+                            .shadow(color: Color.white.opacity(0.4), radius: 12 + (magScale - 1) * 14, x: 0, y: 3 + (magScale - 1) * 4)
+                            .offset(y: -(magScale - 1) * 1.5) // subtle lift toward the glass
                             .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
-                            // Badge on the visual center.
                             .overlay(alignment: .topTrailing) {
                                 badgeOverlay(displaySize: displaySize)
                             }
-                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: magScale)
+                            .animation(.spring(response: 0.18, dampingFraction: 0.78), value: magScale)
                     }
                     // Badge anchored to the resting cell's top-right, NOT the
                     // magnified icon's, so it stays put when the icon grows
@@ -1823,17 +1818,17 @@ struct DockItemView: View {
         }
     }
 
-    @ViewBuilder private func iconContent(size: CGFloat, includeGlow: Bool = true) -> some View {
+    @ViewBuilder private func iconContent(size: CGFloat) -> some View {
         switch item {
         case .app(let a):
             Image(nsImage: a.icon)
                 .resizable()
                 .interpolation(.high)
                 .frame(width: size, height: size)
-                .if(includeGlow) { $0.activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle) }
+                .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
         case .folder(let f):
             FolderIconView(folder: f, size: size)
-                .if(includeGlow) { $0.activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle) }
+                .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
         }
     }
 
@@ -2730,12 +2725,4 @@ struct LiquidGlassEffect: NSViewRepresentable {
     }
 }
 
-extension View {
-    @ViewBuilder func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
-        if condition {
-            transform(self)
-        } else {
-            self
-        }
-    }
-}
+
