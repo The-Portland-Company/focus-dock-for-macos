@@ -111,9 +111,14 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.rebuildStatusItemMenu()
         }
 
-        // Open Settings window on first launch
+        // Open Settings window on first launch and force the dock(s) visible + disable auto-hide
+        // so the user definitely sees the dock at the bottom alongside settings.
         DispatchQueue.main.asyncAfter(deadline: .now() + 0.4) {
             self.openSettings()
+            for dw in self.dockWindows {
+                dw.prefs.autoHideDock = false
+                dw.forceReveal()
+            }
         }
     }
 

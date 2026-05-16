@@ -86,12 +86,12 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: pk(kEdgeOffset)) == nil { defaults.set(8.0, forKey: pk(kEdgeOffset)) }
         if defaults.object(forKey: pk(kShowFinder)) == nil { defaults.set(true, forKey: pk(kShowFinder)) }
         if defaults.object(forKey: pk(kShowTrash)) == nil { defaults.set(true, forKey: pk(kShowTrash)) }
-        if defaults.object(forKey: pk(kAutoHide)) == nil { defaults.set(true, forKey: pk(kAutoHide)) }
+        if defaults.object(forKey: pk(kAutoHide)) == nil { defaults.set(false, forKey: pk(kAutoHide)) }
         if defaults.object(forKey: pk(kBounce)) == nil { defaults.set(true, forKey: pk(kBounce)) }
         if defaults.object(forKey: pk(kRunningDots)) == nil { defaults.set(true, forKey: pk(kRunningDots)) }
         if defaults.object(forKey: pk(kIndicatorStyle)) == nil { defaults.set("glow", forKey: pk(kIndicatorStyle)) }
         if defaults.object(forKey: pk(kShowRecents)) == nil { defaults.set(false, forKey: pk(kShowRecents)) }
-        if defaults.object(forKey: pk(kFillWidth)) == nil { defaults.set(false, forKey: pk(kFillWidth)) }
+        if defaults.object(forKey: pk(kFillWidth)) == nil { defaults.set(true, forKey: pk(kFillWidth)) }
         if defaults.object(forKey: pk(kPaddingUniform)) == nil { defaults.set(false, forKey: pk(kPaddingUniform)) }
         if defaults.object(forKey: pk(kDockScale)) == nil { defaults.set(1.0, forKey: pk(kDockScale)) }
         // Reset transient edit-layout flag every launch (always global).
@@ -174,7 +174,7 @@ final class Preferences: ObservableObject {
         .flushBottom: true, .cornerRadius: 24.0,
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
         .edgeOffset: 8.0, .showFinder: true, .showTrash: true,
-        .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .indicatorStyle: "glow", .showRecentApps: false,
+        .autoHideDock: false, .bounceOnLaunch: true, .showRunningIndicators: true, .indicatorStyle: "glow", .showRecentApps: false,
         .fillWidth: true, .paddingUniform: false,
         .dockScale: 1.0,
         .isEditingLayout: false, .isEditingDocks: false, .isEditingDividers: false
