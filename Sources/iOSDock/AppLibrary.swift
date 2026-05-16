@@ -114,6 +114,39 @@ final class AppLibrary: ObservableObject {
         badgeStates[appName.lowercased()]
     }
 
+    // MARK: - Trash actions (called from DockItemView context menu)
+
+    func openTrash() {
+        let trashURL = URL(fileURLWithPath: (NSHomeDirectory() as NSString).appendingPathComponent(".Trash"))
+        NSWorkspace.shared.open(trashURL)
+    }
+
+    func emptyTrash() {
+        let alert = NSAlert()
+        alert.messageText = "Empty Trash?"
+        alert.informativeText = "Are you sure you want to permanently erase the items in the Trash?"
+        alert.alertStyle = .warning
+        alert.addButton(withTitle: "Empty Trash")
+        alert.addButton(withTitle: "Cancel")
+
+        if alert.runModal() == .alertFirstButtonReturn {
+            let script = """
+            tell application "Finder"
+                empty trash
+            end tell
+            """
+            var error: NSDictionary?
+            if let appleScript = NSAppleScript(source: script) {
+                appleScript.executeAndReturnError(&error)
+                if error == nil {
+                    DispatchQueue.main.async {
+                        self.trashIsEmpty = true
+                    }
+                }
+            }
+        }
+    }
+
     private var activeDockID: UUID { dockID ?? ProfileManager.shared.editingDockID }
 
     private var storageURL: URL {
