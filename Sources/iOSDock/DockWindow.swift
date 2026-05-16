@@ -1164,31 +1164,28 @@ struct RunningAppTileView: View {
             ZStack {
                 let scale = magScale
                 let displaySize = iconSize * scale
+                let magFactor = max(0, magScale - 1.0)
+                let perpExtra = magFactor * 4   // breathing room so glow doesn't get cutoff by neighbors
                 let cellW = isVertical ? iconSize : max(iconSize, displaySize)
-                let cellH = isVertical ? max(iconSize, displaySize) : iconSize
+                let cellH = isVertical ? max(iconSize, displaySize) : iconSize + perpExtra
                 Color.clear
                     .frame(width: cellW, height: cellH)
                     .overlay(alignment: .center) {
-                        // Native Liquid Glass magnification for strongly hovered running apps.
-                        // Deleted old custom shadow + lift code.
-                        let isStronglyMagnified = magScale > 1.15
+                        // Continuous native Liquid Glass magnification for running apps.
+                        let magFactor = max(0, magScale - 1.0)
+                        let glassRadius = 4 + magFactor * 8
+                        let glassExtra = magFactor * 5
+
                         let baseIcon = Image(nsImage: entry.icon)
                             .resizable()
                             .interpolation(.high)
                             .frame(width: displaySize, height: displaySize)
-                            .activeGlow(isRunning: state.isRunning, isFrontmost: state.isFrontmost, style: prefs.indicatorStyle)
 
-                        let iconView: AnyView = if isStronglyMagnified {
-                            AnyView(
-                                LiquidGlassEffect(cornerRadius: 6)
-                                    .frame(width: displaySize, height: displaySize)
-                                    .overlay(baseIcon)
-                            )
-                        } else {
-                            AnyView(baseIcon)
-                        }
-                        iconView
-                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
+                        LiquidGlassEffect(cornerRadius: glassRadius)
+                            .frame(width: displaySize + glassExtra, height: displaySize + glassExtra)
+                            .overlay(baseIcon)
+                            .activeGlow(isRunning: state.isRunning, isFrontmost: state.isFrontmost, style: prefs.indicatorStyle)
+                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: magScale)
                     }
             }
             .trackItemFrame(id: entry.id)
@@ -1649,34 +1646,35 @@ struct DockItemView: View {
                 // overlapping them (matches macOS Dock magnification).
                 let scale = isDragging ? max(1.1, magScale) : (isHoverTarget ? 0.92 : magScale)
                 let displaySize = iconSize * scale
+                let magFactor = max(0, magScale - 1.0)
+                let perpExtra = magFactor * 4
                 let cellW = isDetached ? 0 : (isVertical ? iconSize : max(iconSize, displaySize))
-                let cellH = isDetached ? 0 : (isVertical ? max(iconSize, displaySize) : iconSize)
+                let cellH = isDetached ? 0 : (isVertical ? max(iconSize, displaySize) : iconSize + perpExtra)
                 Color.clear
                     .frame(width: cellW, height: cellH)
                     .overlay(alignment: .center) {
                         // Native Liquid Glass magnification for strongly hovered icons.
                         // Deleted all old custom shadow + manual lift code.
-                        let isStronglyMagnified = magScale > 1.15
-                        let baseIcon = iconContent(size: displaySize)
+                        // Continuous native Liquid Glass magnification.
+                        // Glass radius and halo grow smoothly with magScale — no hard threshold, no pop.
+                        let magFactor = max(0, magScale - 1.0)
+                        let glassRadius = 4 + magFactor * 8
+                        let glassExtra = magFactor * 5
+
+                        let plainIcon = iconContent(size: displaySize, includeGlow: false)
                             .frame(width: displaySize, height: displaySize)
                             .opacity(isDetached ? 0 : (isDragging ? 0.85 : 1.0))
 
-                        let magnifiedIcon = isStronglyMagnified
-                            ? AnyView(
-                                LiquidGlassEffect(cornerRadius: 6)
-                                    .frame(width: displaySize, height: displaySize)
-                                    .overlay(baseIcon)
-                            )
-                            : AnyView(baseIcon)
-
-                        magnifiedIcon
-                            // Badge rides the actual displayed icon's top-right
-                            // corner so it stays pinned to the corner whether
-                            // the icon is at rest or magnified.
+                        LiquidGlassEffect(cornerRadius: glassRadius)
+                            .frame(width: displaySize + glassExtra, height: displaySize + glassExtra)
+                            .overlay(plainIcon)
+                            // Glow on the outer glass container so it can extend without cutoff by neighbors.
+                            .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
+                            // Badge on the visual center.
                             .overlay(alignment: .topTrailing) {
                                 badgeOverlay(displaySize: displaySize)
                             }
-                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: scale)
+                            .animation(.spring(response: 0.18, dampingFraction: 0.75), value: magScale)
                     }
                     // Badge anchored to the resting cell's top-right, NOT the
                     // magnified icon's, so it stays put when the icon grows
@@ -1825,17 +1823,17 @@ struct DockItemView: View {
         }
     }
 
-    @ViewBuilder private func iconContent(size: CGFloat) -> some View {
+    @ViewBuilder private func iconContent(size: CGFloat, includeGlow: Bool = true) -> some View {
         switch item {
         case .app(let a):
             Image(nsImage: a.icon)
                 .resizable()
                 .interpolation(.high)
                 .frame(width: size, height: size)
-                .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
+                .if(includeGlow) { $0.activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle) }
         case .folder(let f):
             FolderIconView(folder: f, size: size)
-                .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
+                .if(includeGlow) { $0.activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle) }
         }
     }
 
@@ -2390,7 +2388,7 @@ struct LiquidGlassTooltip: View {
     private let cornerRadius: CGFloat = 13
     private let arrowBase: CGFloat = 12
     private let arrowHeight: CGFloat = 7
-    private let overlap: CGFloat = 1.0  // minimal intrusion so bubble does not overlap/cover the arrow
+    private let overlap: CGFloat = 1.5  // tuned for better blend with glass tooltip bubble and arrow
     private let hPadding: CGFloat = 11
     private let vPadding: CGFloat = 6
 
@@ -2530,7 +2528,7 @@ final class DockTooltipPanel {
         let contentLeftScreenX = dockF.minX
         let icX = contentLeftScreenX + itemFrame.midX
         let icY = contentTopScreenY - itemFrame.midY
-        let gap: CGFloat = 4.0  // slightly more clearance for new glass bubble + legacy arrow hybrid
+        let gap: CGFloat = 5.5  // extra clearance when icon below has Liquid Glass halo + to avoid distortion
 
         let pw = total.width
         let ph = total.height
@@ -2728,6 +2726,16 @@ struct LiquidGlassEffect: NSViewRepresentable {
                 v.material = .popover
                 v.blendingMode = .behindWindow
             }
+        }
+    }
+}
+
+extension View {
+    @ViewBuilder func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
         }
     }
 }
