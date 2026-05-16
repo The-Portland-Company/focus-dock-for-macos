@@ -40,6 +40,7 @@ final class Preferences: ObservableObject {
     private let kAutoHide = "autoHideDock"
     private let kBounce = "bounceOnLaunch"
     private let kRunningDots = "showRunningIndicators"
+    private let kOpenAppVisualStyle = "openAppVisualStyle"
     private let kShowRecents = "showRecentApps"
     private let kFillWidth = "fillWidth"
     private let kPaddingUniform = "paddingUniform"
@@ -87,6 +88,7 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: pk(kAutoHide)) == nil { defaults.set(true, forKey: pk(kAutoHide)) }
         if defaults.object(forKey: pk(kBounce)) == nil { defaults.set(true, forKey: pk(kBounce)) }
         if defaults.object(forKey: pk(kRunningDots)) == nil { defaults.set(true, forKey: pk(kRunningDots)) }
+        if defaults.object(forKey: pk(kOpenAppVisualStyle)) == nil { defaults.set(OpenAppVisualStyle.glowAndDarken.rawValue, forKey: pk(kOpenAppVisualStyle)) }
         if defaults.object(forKey: pk(kShowRecents)) == nil { defaults.set(false, forKey: pk(kShowRecents)) }
         if defaults.object(forKey: pk(kFillWidth)) == nil { defaults.set(true, forKey: pk(kFillWidth)) }
         if defaults.object(forKey: pk(kPaddingUniform)) == nil { defaults.set(false, forKey: pk(kPaddingUniform)) }
@@ -137,6 +139,7 @@ final class Preferences: ObservableObject {
              tintBackground, backgroundColor, showBorder, borderColor, borderWidth,
              edgeOffset, showFinder, showTrash,
              autoHideDock, bounceOnLaunch, showRunningIndicators, showRecentApps,
+             openAppVisualStyle,
              fillWidth, paddingUniform, dockScale
     }
 
@@ -151,6 +154,7 @@ final class Preferences: ObservableObject {
         .tintBackground: false, .showBorder: true, .borderWidth: 0.5,
         .edgeOffset: 8.0, .showFinder: true, .showTrash: true,
         .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .showRecentApps: false,
+        .openAppVisualStyle: OpenAppVisualStyle.glowAndDarken,
         .fillWidth: true, .paddingUniform: false,
         .dockScale: 1.0
     ]
@@ -203,6 +207,18 @@ final class Preferences: ObservableObject {
         get { defaults.bool(forKey: pk(kRunningDots)) }
         set { defaults.set(newValue, forKey: pk(kRunningDots)); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
     }
+
+    var openAppVisualStyle: OpenAppVisualStyle {
+        get {
+            let raw = defaults.string(forKey: pk(kOpenAppVisualStyle)) ?? OpenAppVisualStyle.glowAndDarken.rawValue
+            return OpenAppVisualStyle(rawValue: raw) ?? .glowAndDarken
+        }
+        set {
+            defaults.set(newValue.rawValue, forKey: pk(kOpenAppVisualStyle))
+            _tick &+= 1
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+        }
+    }
     var showRecentApps: Bool {
         get { defaults.bool(forKey: pk(kShowRecents)) }
         set { defaults.set(newValue, forKey: pk(kShowRecents)); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
@@ -231,6 +247,20 @@ final class Preferences: ObservableObject {
             case .tooltip: return "Tool tip"
             case .above: return "Above icon"
             case .below: return "Below icon"
+            }
+        }
+    }
+
+    enum OpenAppVisualStyle: String, CaseIterable, Identifiable {
+        case dot
+        case glowAndDarken
+
+        var id: String { rawValue }
+
+        var label: String {
+            switch self {
+            case .dot: return "Dot indicator"
+            case .glowAndDarken: return "Glow (active) + Darken (inactive)"
             }
         }
     }

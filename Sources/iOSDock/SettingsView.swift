@@ -519,10 +519,15 @@ struct SettingsView: View {
                     ))
                 }
                 settingRow(.showRunningIndicators) {
-                    Toggle("Show indicators for open applications", isOn: Binding(
-                        get: { prefs.showRunningIndicators },
-                        set: { prefs.showRunningIndicators = $0 }
-                    ))
+                    Picker("Open app style", selection: Binding(
+                        get: { prefs.openAppVisualStyle },
+                        set: { prefs.openAppVisualStyle = $0 }
+                    )) {
+                        ForEach(Preferences.OpenAppVisualStyle.allCases) { style in
+                            Text(style.label).tag(style)
+                        }
+                    }
+                    .pickerStyle(.segmented)
                 }
                 settingRow(.showRecentApps) {
                     Toggle("Show recent apps in dock", isOn: Binding(
