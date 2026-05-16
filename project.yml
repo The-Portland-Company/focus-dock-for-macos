@@ -28,8 +28,8 @@ targets:
       base:
         PRODUCT_BUNDLE_IDENTIFIER: com.theportlandcompany.FocusDock
         PRODUCT_NAME: "Focus Dock"
-        MARKETING_VERSION: "0.5.3"
-        CURRENT_PROJECT_VERSION: "14"
+        MARKETING_VERSION: "0.5.4"
+        CURRENT_PROJECT_VERSION: "15"
         DEVELOPMENT_TEAM: VP38993WK6
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_HARDENED_RUNTIME: YES
