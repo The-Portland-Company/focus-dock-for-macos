@@ -355,6 +355,11 @@ final class Preferences: ObservableObject {
         set { defaults.set(newValue.rawValue, forKey: pk(kLabelMode)); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
     }
 
+    var indicatorStyle: IndicatorStyle {
+        get { IndicatorStyle(rawValue: defaults.string(forKey: pk(kIndicatorStyle)) ?? "glow") ?? .glow }
+        set { defaults.set(newValue.rawValue, forKey: pk(kIndicatorStyle)); _tick &+= 1; NotificationCenter.default.post(name: Self.changed, object: nil) }
+    }
+
     var edge: Edge {
         get { Edge(rawValue: defaults.string(forKey: pk(kEdge)) ?? "bottom") ?? .bottom }
         set {

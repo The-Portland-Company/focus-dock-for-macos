@@ -514,6 +514,11 @@ struct DockView: View {
         id == finderID || id == trashID
     }
 
+    static func isTrash(_ item: DockItem) -> Bool {
+        if case .app(let a) = item { return a.id == trashID }
+        return false
+    }
+
     private static let trashID = UUID(uuidString: "F1DE0000-0000-0000-0000-000000000002")!
     private static let trashEntry = AppEntry(id: trashID,
                                              path: (NSHomeDirectory() as NSString).appendingPathComponent(".Trash"),
@@ -644,6 +649,15 @@ struct DockView: View {
             let n = max(1, renderedSlots.count)
             let autoSpacing: CGFloat = n > 1 ? max(0, (interior - CGFloat(n) * scaledIcon) / CGFloat(n - 1)) : 0
             let scaledSpacing = prefs.fillWidth ? autoSpacing : spacing * scale
+
+            // Account for headroom-induced centering of the icon row inside the
+            // window (length includes alongHeadroom so end icons can magnify without
+            // clipping the rounded chrome). Without this, resting centers are
+            // underestimated by headroom/2, causing the mag gaussian peak to bias
+            // rightward (right neighbor appears more magnified than the hovered item).
+            let contentAlong = CGFloat(n) * scaledIcon + CGFloat(max(0, n - 1)) * scaledSpacing + (isVertical ? (CGFloat(prefs.effectivePaddingTop) + CGFloat(prefs.effectivePaddingBottom)) : (CGFloat(prefs.effectivePaddingLeft) + CGFloat(prefs.effectivePaddingRight)))
+            let extraCenter = max(0, avail - contentAlong) / 2
+            let effectiveIconLeading = (isVertical ? CGFloat(prefs.effectivePaddingTop) : CGFloat(prefs.effectivePaddingLeft)) + extraCenter
 
             ZStack(alignment: dockAlignment) {
                 // Native-Dock-style chrome sized to the resting thickness so it
@@ -1152,6 +1166,7 @@ struct DockItemView: View {
     }
     @State private var folderFormProgress: CGFloat = 0
     @EnvironmentObject var prefs: Preferences
+    @StateObject private var runningMonitor = RunningAppsMonitor.shared
     @Environment(\.dockHoverPoint) private var hoverPoint
     @Environment(\.dockIsVertical) private var isVertical
     @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
@@ -1292,6 +1307,8 @@ struct DockItemView: View {
             if dragState.wiggle {
                 // Exit edit mode on tap in empty-ish area; for now, tapping launches
             }
+            // Ensure any open folder popover is closed when interacting with dock items (click-outside behavior for other icons).
+            NotificationCenter.default.post(name: Notification.Name("FocusDock.CloseAllFolderPopovers"), object: nil)
             switch item {
             case .app(let a):
                 library.launch(a)
@@ -1329,6 +1346,7 @@ struct DockItemView: View {
                 .resizable()
                 .interpolation(.high)
                 .frame(width: size, height: size)
+                .activeGlow(isActive: isActive, style: prefs.indicatorStyle)
         case .folder(let f):
             FolderIconView(folder: f, size: size)
                 .background(
@@ -1918,6 +1936,31 @@ struct AttentionDot: View {
                     pulse = true
                 }
             }
+    }
+}
+
+/// ViewModifier that renders a premium soft glow (layered shadows) around an
+/// icon when it represents the frontmost active application (for indicatorStyle == .glow).
+/// Applied to both main dock icons (including folders) and cells inside folder popovers.
+struct ActiveGlowModifier: ViewModifier {
+    let isActive: Bool
+    let style: Preferences.IndicatorStyle
+
+    func body(content: Content) -> some View {
+        if style == .glow && isActive {
+            content
+                .shadow(color: Color.accentColor.opacity(0.42), radius: 3, x: 0, y: 0)
+                .shadow(color: Color.white.opacity(0.68), radius: 7, x: 0, y: 0)
+                .shadow(color: Color.accentColor.opacity(0.22), radius: 15, x: 0, y: 0)
+        } else {
+            content
+        }
+    }
+}
+
+extension View {
+    func activeGlow(isActive: Bool, style: Preferences.IndicatorStyle) -> some View {
+        self.modifier(ActiveGlowModifier(isActive: isActive, style: style))
     }
 }
 
