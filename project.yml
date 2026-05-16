@@ -21,6 +21,7 @@ targets:
         NSHighResolutionCapable: true
         LSUIElement: true
         NSAppleEventsUsageDescription: "Focus: Dock asks Finder how many items are in the Trash so the dock icon can show empty or full."
+        NSAccessibilityUsageDescription: "Focus: Dock uses Accessibility to read live app badges and minimized window state from the system Dock so it can display them in your custom dock."
         NSMainStoryboardFile: ""
         CFBundleIconName: AppIcon
         CFBundleIconFile: AppIcon
@@ -33,9 +34,14 @@ targets:
         DEVELOPMENT_TEAM: VP38993WK6
         GENERATE_INFOPLIST_FILE: NO
         ENABLE_HARDENED_RUNTIME: YES
-        CODE_SIGN_STYLE: Automatic
-        CODE_SIGN_IDENTITY: "-"
         SWIFT_VERSION: "5.9"
         MACOSX_DEPLOYMENT_TARGET: "13.0"
         ASSETCATALOG_COMPILER_APPICON_NAME: AppIcon
         ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
+      configs:
+        Debug:
+          CODE_SIGN_STYLE: Manual
+          CODE_SIGN_IDENTITY: "Focus Dock Developer"
+        Release:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "-"

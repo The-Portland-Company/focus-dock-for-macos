@@ -30,6 +30,8 @@
 	<true/>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Focus: Dock asks Finder how many items are in the Trash so the dock icon can show empty or full.</string>
+	<key>NSAccessibilityUsageDescription</key>
+	<string>Focus: Dock uses Accessibility to read live app badges and minimized window state from the system Dock so it can display them in your custom dock.</string>
 	<key>NSHighResolutionCapable</key>
 	<true/>
 	<key>NSMainStoryboardFile</key>
