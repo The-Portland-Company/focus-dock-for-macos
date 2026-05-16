@@ -35,6 +35,7 @@ final class RunningAppsMonitor: ObservableObject {
 
     func start() {
         refresh()
+        updateFrontmost()
         let nc = NSWorkspace.shared.notificationCenter
         let names: [NSNotification.Name] = [
             NSWorkspace.didLaunchApplicationNotification,
@@ -98,6 +99,27 @@ final class RunningAppsMonitor: ObservableObject {
         // Stable ordering by name so tiles don't jump around between refreshes.
         result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         if result != apps { apps = result }
+        updateFrontmost()
+    }
+
+    private func updateFrontmost() {
+        if let front = NSWorkspace.shared.frontmostApplication,
+           let url = front.bundleURL?.resolvingSymlinksInPath() {
+            frontmostPath = url.path
+        } else {
+            frontmostPath = nil
+        }
+    }
+
+    /// Returns true if the given (pinned or folder) app path is the currently frontmost application.
+    func isAppActive(_ path: String) -> Bool {
+        guard let f = frontmostPath else { return false }
+        let normalized = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+        return normalized == f
+    }
+
+    func isFolderActive(_ folder: FolderEntry) -> Bool {
+        folder.apps.contains { isAppActive($0.path) }
     }
 
     private func pinnedAppPaths() -> Set<String> {

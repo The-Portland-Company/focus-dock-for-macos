@@ -529,6 +529,11 @@ struct SettingsView: View {
                     }
                     .pickerStyle(.segmented)
                 }
+                Text("Glow (default): soft halo around the frontmost active item. Dot: classic dots under running items. None: hide all running/active indicators.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .padding(.leading, 20)
+                    .padding(.bottom, 8)
                 settingRow(.showRecentApps) {
                     Toggle("Show recent apps in dock", isOn: Binding(
                         get: { prefs.showRecentApps },
