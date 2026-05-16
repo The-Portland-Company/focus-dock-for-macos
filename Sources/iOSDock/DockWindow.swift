@@ -705,6 +705,10 @@ struct DockView: View {
     }
 
     var body: some View {
+        dockContent
+    }
+
+    private var dockContent: some View {
         GeometryReader { proxy in
             let avail = isVertical ? proxy.size.height : proxy.size.width
             let scale = effectiveScale(in: avail)
@@ -734,13 +738,15 @@ struct DockView: View {
             }()
 
             // Ideal along dimension for the window to make the background resize dynamically to the content
-            let headroom = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - scaledIcon) : 0
-            _ = barWidth + headroom // idealAlong kept for future dynamic window sizing
+            let _ = prefs.magnifyOnHover ? max(0, CGFloat(prefs.magnifySize) - scaledIcon) : 0
 
             ZStack(alignment: dockAlignment) {
-                // Native-Dock-style chrome sized to the resting thickness so it
-                // doesn't grow with icon magnification.
-                dockChrome
+                // The chrome defines the visual bar. The icon content is overlaid
+                // and explicitly centered inside the chrome's exact bounds.
+                // This guarantees icons (all types) are geometrically centered
+                // within the rounded dock material, independent of window headroom
+                // and magnification.
+                let barFrame = dockChrome
                     .contextMenu {
                         editDockContextMenu
                     }
@@ -748,35 +754,36 @@ struct DockView: View {
                         width: isVertical ? restingThickness : (prefs.fillWidth ? nil : barWidth),
                         height: isVertical ? (prefs.fillWidth ? nil : barWidth) : restingThickness
                     )
-                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isVertical ? .top : .leading)
 
-                Group {
-                    if isVertical {
-                        let hPad = CGFloat(prefs.effectivePaddingLeft) // even left/right margin for vertical docks
-                        VStack(spacing: 0) { iconRow(iconSize: scaledIcon, userGap: userGap, fillGap: fillGap) }
-                            .padding(.top, CGFloat(prefs.effectivePaddingTop))
-                            .padding(.bottom, CGFloat(prefs.effectivePaddingBottom))
-                            .padding(.leading, hPad)
-                            .padding(.trailing, hPad)
-                            .contentShape(Rectangle())
-                            .contextMenu {
-                                editDockContextMenu
+                barFrame
+                    .frame(maxWidth: .infinity, maxHeight: .infinity, alignment: isVertical ? .top : .leading)
+                    .overlay(alignment: .center) {
+                        Group {
+                            if isVertical {
+                                let hPad = CGFloat(prefs.effectivePaddingLeft)
+                                VStack(spacing: 0) { iconRow(iconSize: scaledIcon, userGap: userGap, fillGap: fillGap) }
+                                    .padding(.top, CGFloat(prefs.effectivePaddingTop))
+                                    .padding(.bottom, CGFloat(prefs.effectivePaddingBottom))
+                                    .padding(.leading, hPad)
+                                    .padding(.trailing, hPad)
+                                    .contentShape(Rectangle())
+                                    .contextMenu {
+                                        editDockContextMenu
+                                    }
+                            } else {
+                                let vPad = CGFloat(prefs.effectivePaddingTop)
+                                HStack(spacing: 0) { iconRow(iconSize: scaledIcon, userGap: userGap, fillGap: fillGap) }
+                                    .padding(.top, vPad)
+                                    .padding(.bottom, vPad)
+                                    .padding(.leading, CGFloat(prefs.effectivePaddingLeft))
+                                    .padding(.trailing, CGFloat(prefs.effectivePaddingRight))
+                                    .contentShape(Rectangle())
+                                    .contextMenu {
+                                        editDockContextMenu
+                                    }
                             }
-                            .frame(maxWidth: restingThickness, maxHeight: .infinity, alignment: .center)
-                    } else {
-                        let vPad = CGFloat(prefs.effectivePaddingTop) // even top/bottom margin controlled by Padding setting
-                        HStack(spacing: 0) { iconRow(iconSize: scaledIcon, userGap: userGap, fillGap: fillGap) }
-                            .padding(.top, vPad)
-                            .padding(.bottom, vPad)
-                            .padding(.leading, CGFloat(prefs.effectivePaddingLeft))
-                            .padding(.trailing, CGFloat(prefs.effectivePaddingRight))
-                            .contentShape(Rectangle())
-                            .contextMenu {
-                                editDockContextMenu
-                            }
-                            .frame(maxWidth: .infinity, maxHeight: restingThickness, alignment: .center)
+                        }
                     }
-                }
                 if prefs.isEditingLayout {
                     EditModePill()
                         .padding(8)
