@@ -167,7 +167,7 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let fullCount = actualSlotCount - narrowCount
         let gapCount = max(0, actualSlotCount - 1)
         let gaps = CGFloat(gapCount) * spacing
-        let dividers = CGFloat(narrowCount) * 8
+        let dividers = CGFloat(narrowCount) * 24 // 10+1+10 (or bubble ~10+6+10) fixed side spacing for dividers
         let totalIcons: CGFloat = CGFloat(fullCount) * iconSize + dividers + gaps
 
         // The icons may be compressed to fit; the *effective* icon size is what
@@ -534,10 +534,10 @@ struct DockView: View {
         let iconCount = slots.filter { slotOccupiesIconSpace($0) }.count
         let divCount = slots.count - iconCount
         let interior = max(0, available - CGFloat(isVertical ? prefs.effectivePaddingTop + prefs.effectivePaddingBottom : prefs.effectivePaddingLeft + prefs.effectivePaddingRight))
-        // Icons scale; dividers use fixed narrow cells. Reserve space for dividers + approx gaps.
+        // Dividers now use fixed 10pt side padding (clean, no variable gap). Their full cell is internalized.
         let iconDesired = CGFloat(iconCount) * iconSize + CGFloat(max(0, iconCount - 1)) * spacing
-        let divDesired = CGFloat(divCount) * customDividerCellWidth + CGFloat(max(0, divCount)) * (spacing * 0.5)
-        let desired = iconDesired + divDesired + CGFloat(max(0, slots.count - iconCount - 1)) * spacing * 0.5
+        let divDesired = CGFloat(divCount) * 24
+        let desired = iconDesired + divDesired // divider-adj gaps are now 0 (internalized in cell)
         if desired <= interior { return 1 }
         // Only scale the icon portion down if needed.
         let remaining = max(20, interior - divDesired)
@@ -689,7 +689,9 @@ struct DockView: View {
                 for ii in 0..<(n - 1) {
                     let p = slots[ii]
                     let nx = slots[ii + 1]
-                    if shouldUseUserGap(between: p, and: nx) {
+                    if isDividerSlot(p) || isDividerSlot(nx) {
+                        // gap=0 fixed (10pt internalized in divider cell)
+                    } else if shouldUseUserGap(between: p, and: nx) {
                         fixedSum += userG
                     } else {
                         numF += 1
@@ -703,7 +705,7 @@ struct DockView: View {
             var pos = leadPadForCalc
             for ii in 0..<n {
                 let sl = slots[ii]
-                let cellW = slotOccupiesIconSpace(sl) ? scaledIcon : customDividerCellWidth
+                let cellW = slotOccupiesIconSpace(sl) ? scaledIcon : dividerCellWidth(for: sl, baseIcon: scaledIcon)
                 let cen = pos + cellW / 2
                 if case .item(let it) = sl {
                     centers[it.id] = cen
@@ -711,7 +713,7 @@ struct DockView: View {
                     centers[r.id] = cen
                 }
                 if ii < n - 1 {
-                    let g = shouldUseUserGap(between: sl, and: slots[ii + 1]) ? userG : fillG
+                    let g = gapBetween(sl, slots[ii + 1], userGap: userG, fillGap: fillG)
                     pos += cellW + g
                 }
             }
@@ -742,10 +744,10 @@ struct DockView: View {
             let barWidth: CGFloat = {
                 var packed: CGFloat = 0
                 for (i, slot) in renderedSlots.enumerated() {
-                    let w = slotOccupiesIconSpace(slot) ? scaledIcon : customDividerCellWidth
+                    let w = slotOccupiesIconSpace(slot) ? scaledIcon : dividerCellWidth(for: slot, baseIcon: scaledIcon)
                     packed += w
                     if i < renderedSlots.count - 1 {
-                        let g = shouldUseUserGap(between: slot, and: renderedSlots[i + 1]) ? userGap : fillGap
+                        let g = gapBetween(slot, renderedSlots[i + 1], userGap: userGap, fillGap: fillGap)
                         packed += g
                     }
                 }
@@ -779,7 +781,7 @@ struct DockView: View {
                 var sum: CGFloat = 0
                 let slots = renderedSlots
                 for (i, slot) in slots.enumerated() {
-                    let baseCell: CGFloat = slotOccupiesIconSpace(slot) ? scaledIcon : customDividerCellWidth
+                    let baseCell: CGFloat = slotOccupiesIconSpace(slot) ? scaledIcon : dividerCellWidth(for: slot, baseIcon: scaledIcon)
                     var scale: CGFloat = 1.0
                     if case .item(let it) = slot, let c = restingIDToCenter[it.id] {
                         let mouse = isVertical ? (hoverPoint?.y ?? 0) : (hoverPoint?.x ?? 0)
@@ -799,7 +801,7 @@ struct DockView: View {
                     let liveCell = slotOccupiesIconSpace(slot) ? max(baseCell, baseCell * scale) : baseCell
                     sum += liveCell
                     if i < slots.count - 1 {
-                        let g = shouldUseUserGap(between: slot, and: slots[i + 1]) ? userGap : fillGap
+                        let g = gapBetween(slot, slots[i + 1], userGap: userGap, fillGap: fillGap)
                         sum += g
                     }
                 }
@@ -1011,9 +1013,41 @@ struct DockView: View {
         }
     }
 
-    /// The fixed visual cell width (points) allocated to a custom divider slot.
-    /// The bubble itself is even narrower and centered inside it.
-    private var customDividerCellWidth: CGFloat { 8 }
+    /// Fixed 10pt left + right (or top + bottom for vertical docks) spacing around every
+    /// divider line / bubble. This is the exact gap from neighboring icon edge to the
+    /// visual divider element. Inter-slot gaps in iconRow are forced to 0 next to any
+    /// divider so the padding here alone provides the clean 10pt.
+    private let dividerSidePadding: CGFloat = 10
+
+    private func isDividerSlot(_ s: DockSlot) -> Bool {
+        switch s {
+        case .divider, .runningDivider, .customDivider:
+            return true
+        default:
+            return false
+        }
+    }
+
+    /// Returns the gap to insert in the HStack/VStack between two consecutive slots.
+    /// 0 around any divider (spacing is provided by the divider view's fixed 10pt padding).
+    private func gapBetween(_ prev: DockSlot, _ next: DockSlot, userGap: CGFloat, fillGap: CGFloat) -> CGFloat {
+        if isDividerSlot(prev) || isDividerSlot(next) {
+            return 0
+        }
+        return shouldUseUserGap(between: prev, and: next) ? userGap : fillGap
+    }
+
+    /// Occupied along-axis width for a divider slot (used for chrome sizing and
+    /// compression scale). 10 + visual_thickness + 10. Custom bubble is slightly
+    /// thicker than the 1pt system line.
+    private func dividerCellWidth(for slot: DockSlot, baseIcon: CGFloat) -> CGFloat {
+        if case .customDivider = slot {
+            let t = max(3.0, min(7.0, baseIcon * 0.12))
+            return 2 * dividerSidePadding + t
+        } else {
+            return 2 * dividerSidePadding + 1
+        }
+    }
 
     @ViewBuilder private func iconRow(iconSize: CGFloat, userGap: CGFloat, fillGap: CGFloat) -> some View {
         let slots = renderedSlots
@@ -1022,7 +1056,7 @@ struct DockView: View {
             Group {
                 slotContent(for: slot, index: idx, iconSize: iconSize, spacingForFallback: fillGap, userGap: userGap, fillGap: fillGap)
                 if idx < nn - 1 {
-                    let g = shouldUseUserGap(between: slot, and: slots[idx + 1]) ? userGap : fillGap
+                    let g = gapBetween(slot, slots[idx + 1], userGap: userGap, fillGap: fillGap)
                     Color.clear
                         .frame(width: isVertical ? 0 : g, height: isVertical ? g : 0)
                 }
@@ -1045,11 +1079,11 @@ struct DockView: View {
         case .minimized(let window):
             MinimizedTileView(window: window, iconSize: iconSize, isVertical: isVertical)
         case .divider, .runningDivider:
-            let dSpacing = isRightProtectedSlot(slot) ? userGap : fillGap
-            DockDivider(isVertical: isVertical, iconSize: iconSize, spacing: dSpacing)
+            // Fixed 10pt side padding inside DockDivider provides exact spacing; no dSpacing needed.
+            DockDivider(isVertical: isVertical, iconSize: iconSize)
         case .customDivider(let d):
-            let dSpacing = userGap // always user spacing around custom visual dividers
-            BubbleDividerView(isVertical: isVertical, iconSize: iconSize, spacing: dSpacing, divider: d)
+            // Fixed 10pt side padding inside BubbleDividerView; inter-slot gap is 0.
+            BubbleDividerView(isVertical: isVertical, iconSize: iconSize, divider: d)
         }
     }
 }
@@ -1178,9 +1212,8 @@ struct RunningAppTileView: View {
                         let accent = Color(nsColor: NSColor.controlAccentColor)
 
                         baseIcon
-                            .shadow(color: accent.opacity(0.35), radius: 8 + (magScale - 1) * 12, x: 0, y: 2 + (magScale - 1) * 3)
-                            .shadow(color: Color.white.opacity(0.4), radius: 12 + (magScale - 1) * 14, x: 0, y: 3 + (magScale - 1) * 4)
-                            .offset(y: -(magScale - 1) * 1.5)
+                            .shadow(color: Color.black.opacity(0.22 + (magScale - 1) * 0.12), radius: 5 + (magScale - 1) * 5, x: 0, y: 2 + (magScale - 1) * 2)
+                            .offset(y: -(magScale - 1) * 1.3)
                             .activeGlow(isRunning: state.isRunning, isFrontmost: state.isFrontmost, style: prefs.indicatorStyle)
                             .animation(.spring(response: 0.18, dampingFraction: 0.78), value: magScale)
                     }
@@ -1210,49 +1243,43 @@ struct RunningAppTileView: View {
 
 /// Thin 1pt divider line that visually separates dock sections:
 /// (pinned apps) — runningDivider — (running apps) — divider — (minimized windows).
-/// To create clear visual breaks, we apply `2 × spacing` (where `spacing` is
-/// the normal effective spacing or fill gap for that divider) as padding on
-/// *both* sides along the dock's primary axis. Combined with the adjacent
-/// layout gap (1×) inserted before/after the divider slot in the iconRow,
-/// this yields an effective gap of 3× the relevant spacing value before the
-/// line and 3× after the line. The line itself stays 1pt thin and is centered
-/// on the cross axis within an icon-sized footprint. Works for both horizontal
-/// and vertical docks. Respects prefs.effectiveSpacing, scale, and fillWidth.
+/// Uses exactly 10pt padding on each side of the 1pt line (left/right for horiz,
+/// top/bottom for vert) for clean consistent spacing around all divider types.
+/// No extra stroke/glow. Crisp native Rectangle fill. Fixed size (no mag).
 struct DockDivider: View {
     let isVertical: Bool
     let iconSize: CGFloat
-    let spacing: CGFloat
 
     var body: some View {
-        let extra = 2 * spacing
+        let side: CGFloat = 10
         Group {
             if isVertical {
                 Rectangle()
                     .fill(Color.white.opacity(0.18))
                     .frame(width: iconSize * 0.6, height: 1)
-                    .padding(.vertical, extra)
+                    .padding(.vertical, side)
                     .frame(width: iconSize, alignment: .center)
             } else {
                 Rectangle()
                     .fill(Color.white.opacity(0.18))
                     .frame(width: 1, height: iconSize * 0.6)
-                    .padding(.horizontal, extra)
+                    .padding(.horizontal, side)
                     .frame(height: iconSize, alignment: .center)
             }
         }
-        .frame(height: iconSize, alignment: .center) // ensure the divider line is centered in the icon cell area
+        .frame(height: iconSize, alignment: .center)
         .allowsHitTesting(false)
     }
 }
 
-/// Premium "bubble" visual divider that splits the dock surface with a frosted
-/// glass pill / capsule aesthetic (inspired by macOS Stage Manager separators,
-/// liquid glass, and inset depth). Narrow fixed-width cell, centered bubble.
-/// In Edit Dock mode the bubble is interactive (tap to delete).
+/// Frosted glass capsule divider for user custom dividers. Clean implementation:
+/// removed strokeBorder (was unwanted border/outline) and accent glow shadow
+/// (was unwanted glow/outline around divider). Keeps native VisualEffectBlur,
+/// inner tint gradient, center seam, and depth shadow only. Exactly 10pt side
+/// padding for consistent clean spacing (matches DockDivider). Fixed, no mag.
 struct BubbleDividerView: View {
     let isVertical: Bool
     let iconSize: CGFloat
-    let spacing: CGFloat
     let divider: DockDividerBar
 
     @EnvironmentObject var prefs: Preferences
@@ -1265,7 +1292,7 @@ struct BubbleDividerView: View {
         let bubbleShape = Capsule(style: .continuous)
 
         let glassBubble = ZStack {
-            // Frosted glass base (behind-window blur for depth)
+            // Frosted glass base (behind-window blur for depth) — Apple native
             VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
                 .clipShape(bubbleShape)
                 .opacity(0.85)
@@ -1285,18 +1312,7 @@ struct BubbleDividerView: View {
                 )
                 .blendMode(.plusLighter)
 
-            // Crisp inset rim for "splitting" the dock surface
-            bubbleShape
-                .strokeBorder(
-                    LinearGradient(
-                        colors: [Color.white.opacity(0.55), Color.white.opacity(0.15)],
-                        startPoint: .top,
-                        endPoint: .bottom
-                    ),
-                    lineWidth: 0.8
-                )
-
-            // Very subtle center "seam" line for extra split character (horizontal dock)
+            // Very subtle center "seam" line for split character (horiz dock)
             if !isVertical {
                 Rectangle()
                     .fill(Color.white.opacity(0.25))
@@ -1308,8 +1324,8 @@ struct BubbleDividerView: View {
             width: isVertical ? bubbleLength : bubbleThickness,
             height: isVertical ? bubbleThickness : bubbleLength
         )
+        // Depth shadow only — clean, no border, no accent glow
         .shadow(color: .black.opacity(0.28), radius: 2.5, x: 0, y: 1)
-        .shadow(color: Color.accentColor.opacity(0.12), radius: 5, x: 0, y: 0) // soft accent glow
         .overlay(
             // In edit mode, a small remove affordance on hover/tap
             Group {
@@ -1332,11 +1348,11 @@ struct BubbleDividerView: View {
         Group {
             if isVertical {
                 glassBubble
-                    .padding(.vertical, max(0, spacing - 1))
+                    .padding(.vertical, 10)
                     .frame(width: iconSize, alignment: .center)
             } else {
                 glassBubble
-                    .padding(.horizontal, max(0, spacing - 1))
+                    .padding(.horizontal, 10)
                     .frame(height: iconSize, alignment: .center)
             }
         }
@@ -1346,8 +1362,8 @@ struct BubbleDividerView: View {
                 library.removeDivider(id: divider.id)
             }
         }
-        .trackItemFrame(id: divider.id) // so drag-to-insert gap detection can see it
-        .allowsHitTesting(prefs.isEditingDividers) // normal mode: purely visual, no hit
+        .trackItemFrame(id: divider.id)
+        .allowsHitTesting(prefs.isEditingDividers)
     }
 }
 
@@ -1658,13 +1674,10 @@ struct DockItemView: View {
                             .frame(width: displaySize, height: displaySize)
                             .opacity(isDetached ? 0 : (isDragging ? 0.85 : 1.0))
 
-                        let accent = Color(nsColor: NSColor.controlAccentColor)
-
                         plainIcon
-                            // Extra depth shadow that grows with magnification (on top of activeGlow).
-                            .shadow(color: accent.opacity(0.35), radius: 8 + (magScale - 1) * 12, x: 0, y: 2 + (magScale - 1) * 3)
-                            .shadow(color: Color.white.opacity(0.4), radius: 12 + (magScale - 1) * 14, x: 0, y: 3 + (magScale - 1) * 4)
-                            .offset(y: -(magScale - 1) * 1.5) // subtle lift toward the glass
+                            // Clean, subtle depth shadow for magnification (no bright white crown/rise).
+                            .shadow(color: Color.black.opacity(0.22 + (magScale - 1) * 0.12), radius: 5 + (magScale - 1) * 5, x: 0, y: 2 + (magScale - 1) * 2)
+                            .offset(y: -(magScale - 1) * 1.3)
                             .activeGlow(isRunning: runningState.isRunning, isFrontmost: runningState.isFrontmost, style: prefs.indicatorStyle)
                             .overlay(alignment: .topTrailing) {
                                 badgeOverlay(displaySize: displaySize)
@@ -2285,12 +2298,12 @@ struct ActiveGlowModifier: ViewModifier {
             // changes the accent color at runtime.
             let accent = Color(nsColor: NSColor.controlAccentColor)
             if isFrontmost {
-                // Strong, prominent glow for the focused/frontmost item.
-                // Layered shadows for a rich premium halo using accent + white highlights.
+                // Controlled frontmost glow: main mass downward + very subtle top rim only.
+                // Eliminates the "rise above the app" while keeping premium selected look.
                 content
-                    .shadow(color: accent.opacity(0.58), radius: 5, x: 0, y: 0)
-                    .shadow(color: Color.white.opacity(0.78), radius: 9, x: 0, y: 0)
-                    .shadow(color: accent.opacity(0.32), radius: 18, x: 0, y: 0)
+                    .shadow(color: accent.opacity(0.6), radius: 3, x: 0, y: 0)
+                    .shadow(color: accent.opacity(0.4), radius: 8, x: 0, y: 4)   // downward bias
+                    .shadow(color: Color.white.opacity(0.3), radius: 2, x: 0, y: -0.5) // tiny top specular only
             } else {
                 // Subtle, tasteful glow for any other running (but not focused) app/folder.
                 content
@@ -2383,40 +2396,18 @@ struct LiquidGlassTooltip: View {
     private let cornerRadius: CGFloat = 13
     private let arrowBase: CGFloat = 12
     private let arrowHeight: CGFloat = 7
-    private let overlap: CGFloat = 1.5  // tuned for better blend with glass tooltip bubble and arrow
+    private let overlap: CGFloat = 2.0  // negative spacing merges glass at arrow attach; legacy blur for tri
     private let hPadding: CGFloat = 11
     private let vPadding: CGFloat = 6
 
-    private var arrowAlignment: Alignment {
-        switch model.direction {
-        case .down: return .bottom
-        case .up: return .top
-        case .left: return .leading
-        case .right: return .trailing
-        }
-    }
-
-    private var arrowPadding: EdgeInsets {
-        let extra = arrowHeight - overlap
-        switch model.direction {
-        case .down: return EdgeInsets(top: 0, leading: 0, bottom: extra, trailing: 0)
-        case .up: return EdgeInsets(top: extra, leading: 0, bottom: 0, trailing: 0)
-        case .left: return EdgeInsets(top: 0, leading: extra, bottom: 0, trailing: 0)
-        case .right: return EdgeInsets(top: 0, leading: 0, bottom: 0, trailing: extra)
-        }
-    }
-
-    private var arrowOffset: CGSize {
-        let o: CGFloat = 0.5
-        switch model.direction {
-        case .down: return CGSize(width: 0, height: -o)
-        case .up: return CGSize(width: 0, height: o)
-        case .left: return CGSize(width: -o, height: 0)
-        case .right: return CGSize(width: o, height: 0)
-        }
-    }
-
     var body: some View {
+        callout
+            .scaleEffect(model.isShowing ? 1.0 : 0.92)
+            .opacity(model.isShowing ? 1.0 : 0.0)
+            .animation(.spring(response: 0.22, dampingFraction: 0.82), value: model.isShowing)
+    }
+
+    @ViewBuilder private var callout: some View {
         let textView = Text(model.text)
             .font(.system(size: 12, weight: .medium))
             .foregroundStyle(Color.primary)
@@ -2427,17 +2418,37 @@ struct LiquidGlassTooltip: View {
             .padding(.horizontal, hPadding)
             .padding(.vertical, vPadding)
 
-        textView
-            .background(bubbleBackground)
-            .overlay(arrowOverlay, alignment: arrowAlignment)
-            .padding(arrowPadding)
-            .scaleEffect(model.isShowing ? 1.0 : 0.92)
-            .opacity(model.isShowing ? 1.0 : 0.0)
-            .animation(.spring(response: 0.22, dampingFraction: 0.82), value: model.isShowing)
+        let bubble = textView.background(bubbleBackground)
+        let arrow = arrowPart
+
+        switch model.direction {
+        case .down:
+            VStack(alignment: .center, spacing: -overlap) {
+                bubble
+                arrow
+            }
+        case .up:
+            VStack(alignment: .center, spacing: -overlap) {
+                arrow
+                bubble
+            }
+        case .left:
+            HStack(alignment: .center, spacing: -overlap) {
+                arrow
+                bubble
+            }
+        case .right:
+            HStack(alignment: .center, spacing: -overlap) {
+                bubble
+                arrow
+            }
+        }
     }
 
     private var bubbleBackground: some View {
-        LiquidGlassEffect(cornerRadius: cornerRadius)
+        // Match dock glass (.hudWindow) so arrow + bubble read as single continuous element
+        VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
+            .clipShape(RoundedRectangle(cornerRadius: cornerRadius, style: .continuous))
             .overlay(
                 RoundedRectangle(cornerRadius: cornerRadius, style: .continuous)
                     .strokeBorder(Color.white.opacity(0.20), lineWidth: 0.8)
@@ -2445,20 +2456,41 @@ struct LiquidGlassTooltip: View {
             .shadow(color: .black.opacity(0.28), radius: 10, x: 0, y: 4)
     }
 
-    private var arrowOverlay: some View {
+    private var arrowPart: some View {
         let tri = ArrowTriangle(direction: model.direction)
         let sz = model.direction.isHorizontal
             ? CGSize(width: arrowHeight, height: arrowBase)
             : CGSize(width: arrowBase, height: arrowHeight)
+        // Hybrid: legacy hudWindow blur for tri (NSGlass clips badly); stroke only exposed legs, no base line inside bubble
+        let legs = pointerLegs(direction: model.direction, size: sz)
         return tri
             .fill(Color.clear)
             .background(
                 VisualEffectBlur(material: .hudWindow, blendingMode: .behindWindow)
                     .clipShape(tri)
             )
-            .overlay(tri.stroke(Color.white.opacity(0.20), lineWidth: 0.7))
+            .overlay(legs.stroke(Color.white.opacity(0.20), lineWidth: 0.7))
             .frame(width: sz.width, height: sz.height)
-            .offset(arrowOffset)
+    }
+
+    private func pointerLegs(direction: TooltipPointDirection, size: CGSize) -> Path {
+        var p = Path()
+        let w = size.width, h = size.height
+        switch direction {
+        case .down:
+            p.move(to: CGPoint(x: 0, y: 0)); p.addLine(to: CGPoint(x: w/2, y: h))
+            p.move(to: CGPoint(x: w, y: 0)); p.addLine(to: CGPoint(x: w/2, y: h))
+        case .up:
+            p.move(to: CGPoint(x: 0, y: h)); p.addLine(to: CGPoint(x: w/2, y: 0))
+            p.move(to: CGPoint(x: w, y: h)); p.addLine(to: CGPoint(x: w/2, y: 0))
+        case .left:
+            p.move(to: CGPoint(x: w, y: 0)); p.addLine(to: CGPoint(x: 0, y: h/2))
+            p.move(to: CGPoint(x: w, y: h)); p.addLine(to: CGPoint(x: 0, y: h/2))
+        case .right:
+            p.move(to: CGPoint(x: 0, y: 0)); p.addLine(to: CGPoint(x: w, y: h/2))
+            p.move(to: CGPoint(x: 0, y: h)); p.addLine(to: CGPoint(x: w, y: h/2))
+        }
+        return p
     }
 }
 
@@ -2508,7 +2540,7 @@ final class DockTooltipPanel {
 
         let body = idealSize(for: text)
         let arrowH: CGFloat = 7
-        let ov: CGFloat = 1.0
+        let ov: CGFloat = 2.0
         let total: CGSize
         switch direction {
         case .down, .up:
