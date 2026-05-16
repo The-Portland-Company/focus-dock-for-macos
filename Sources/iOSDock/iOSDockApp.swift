@@ -17,6 +17,11 @@ struct FocusDockApp: App {
 }
 
 final class AppDelegate: NSObject, NSApplicationDelegate {
+    /// Static back-reference used by helpers that can't reliably cast
+    /// `NSApp.delegate` (the SwiftUI delegate adaptor's cast is unreliable
+    /// across module boundaries). Set on launch.
+    static weak var shared: AppDelegate?
+
     /// Primary dock window (also tracked in `dockWindows[0]`). Kept as a
     /// backwards-compatible alias for code paths that need "any" dock — e.g.
     /// the menu-bar "Show Dock" command.
@@ -29,6 +34,7 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private var editModeOverlayWindow: NSWindow?
 
     func applicationDidFinishLaunching(_ notification: Notification) {
+        Self.shared = self
         NotificationCenter.default.addObserver(
             forName: NSWindow.didBecomeKeyNotification, object: nil, queue: .main
         ) { _ in Self.makeSettingsWindowResizable() }
@@ -64,6 +70,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
         // Offer to hide system Dock (so this dock can take over).
         SystemDockManager.hideSystemDock()
+
+        // Custom minimize animation that flies to our dock icon, since macOS
+        // points its native genie at the (hidden) system Dock tile.
+        MinimizeAnimator.shared.start()
 
         // Start polling the system Dock's AX tree for numeric badges and
         // attention requests. Prompts once for Accessibility permission;
