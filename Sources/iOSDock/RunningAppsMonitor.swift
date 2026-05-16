@@ -17,6 +17,15 @@ struct RunningAppEntry: Identifiable, Equatable {
     }
 }
 
+/// Lightweight state describing whether a pinned (or folder-contained) app path
+/// has one or more running processes, and whether it is currently the frontmost
+/// application. Used to drive differentiated subtle vs. strong glows (or dots
+/// vs. underlines in classic indicator mode).
+struct AppRunningState: Equatable {
+    let isRunning: Bool
+    let isFrontmost: Bool
+}
+
 /// Publishes the list of regular running apps that aren't already pinned in
 /// `AppLibrary.items`. Native macOS Dock parity: even apps the user hasn't
 /// pinned should show up while they're running. Driven by NSWorkspace launch/
@@ -27,6 +36,10 @@ final class RunningAppsMonitor: ObservableObject {
 
     @Published private(set) var apps: [RunningAppEntry] = []
     @Published private(set) var frontmostPath: String? = nil
+    /// All paths (normalized) of currently running regular apps (Finder, pinned, and
+    /// ephemeral). Used for fast isAppRunning checks and to trigger dock re-renders
+    /// when a pinned app launches or quits.
+    @Published private(set) var runningAppPaths: Set<String> = []
 
     private var observers: [NSObjectProtocol] = []
     private var librarySubscription: AnyCancellable?
@@ -71,12 +84,14 @@ final class RunningAppsMonitor: ObservableObject {
         let pinnedPaths = pinnedAppPaths()
         var result: [RunningAppEntry] = []
         var seenPaths = Set<String>()
+        var allRunningPaths: Set<String> = []
         for app in NSWorkspace.shared.runningApplications {
             guard app.activationPolicy == .regular,
                   app.processIdentifier > 0,
                   app.processIdentifier != ownPID,
                   let url = app.bundleURL else { continue }
             let path = url.resolvingSymlinksInPath().path
+            allRunningPaths.insert(path)
             if pinnedPaths.contains(path) { continue }
             // Don't duplicate the virtual Finder slot (always rendered separately).
             if path == "/System/Library/CoreServices/Finder.app" { continue }
@@ -95,6 +110,7 @@ final class RunningAppsMonitor: ObservableObject {
         // Stable ordering by name so tiles don't jump around between refreshes.
         result.sort { $0.name.localizedCaseInsensitiveCompare($1.name) == .orderedAscending }
         if result != apps { apps = result }
+        if allRunningPaths != runningAppPaths { runningAppPaths = allRunningPaths }
         updateFrontmost()
     }
 
@@ -107,15 +123,49 @@ final class RunningAppsMonitor: ObservableObject {
         }
     }
 
-    /// Returns true if the given (pinned or folder) app path is the currently frontmost application.
+    private func normalized(_ path: String) -> String {
+        URL(fileURLWithPath: path).resolvingSymlinksInPath().path
+    }
+
+    /// Returns the running + frontmost state for a single app path (used by both
+    /// main dock items and ephemeral running-app tiles).
+    func runningState(for path: String) -> AppRunningState {
+        let norm = normalized(path)
+        let fm = frontmostPath
+        let isFM = (fm != nil && norm == fm)
+        let isRun = runningAppPaths.contains(norm) || isFM
+        return AppRunningState(isRunning: isRun, isFrontmost: isFM)
+    }
+
+    /// Returns the aggregate running + frontmost state for a folder (any contained
+    /// app running → subtle; the frontmost app inside → strong glow/underline).
+    func runningState(for folder: FolderEntry) -> AppRunningState {
+        var hasRun = false
+        var hasFM = false
+        for a in folder.apps {
+            let st = runningState(for: a.path)
+            if st.isFrontmost { hasFM = true; hasRun = true; break }
+            if st.isRunning { hasRun = true }
+        }
+        return AppRunningState(isRunning: hasRun, isFrontmost: hasFM)
+    }
+
+    /// Legacy wrapper retained for compatibility during transition.
     func isAppActive(_ path: String) -> Bool {
-        guard let f = frontmostPath else { return false }
-        let normalized = URL(fileURLWithPath: path).resolvingSymlinksInPath().path
-        return normalized == f
+        runningState(for: path).isFrontmost
     }
 
     func isFolderActive(_ folder: FolderEntry) -> Bool {
-        folder.apps.contains { isAppActive($0.path) }
+        runningState(for: folder).isFrontmost
+    }
+
+    /// Convenience: true when the path has at least one running process.
+    func isAppRunning(_ path: String) -> Bool {
+        runningState(for: path).isRunning
+    }
+
+    func folderHasRunningApps(_ folder: FolderEntry) -> Bool {
+        runningState(for: folder).isRunning
     }
 
     private func pinnedAppPaths() -> Set<String> {

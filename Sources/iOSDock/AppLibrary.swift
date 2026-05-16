@@ -75,6 +75,17 @@ struct FolderEntry: Identifiable, Equatable, Codable {
     var columns: Int? = nil
 }
 
+/// A user-inserted visual divider bar (bubble/pill) that splits the dock into
+/// organized sections. Persisted per-dock alongside items. Visual only (no
+/// drag-and-drop barrier behavior yet).
+struct DockDividerBar: Identifiable, Equatable, Codable {
+    var id = UUID()
+    /// If non-nil, this divider appears immediately after the DockItem with this ID
+    /// in the pinned list. If nil, it appears at the very start of the user items
+    /// (before Finder if shown).
+    var afterItemID: UUID? = nil
+}
+
 /// Used to deep-link from a dock folder popover into Settings → Apps with that
 /// folder selected/expanded.
 enum SettingsRouter {
@@ -107,6 +118,12 @@ final class AppLibrary: ObservableObject {
         didSet { save() }
     }
 
+    /// User-inserted visual divider bars. Changes trigger save (which writes
+    /// both items + dividers to the same library.json for the dock).
+    @Published var dividers: [DockDividerBar] = [] {
+        didSet { save() }
+    }
+
     @Published var badgeStates: [String: AppBadgeState] = [:]
     @Published var trashIsEmpty: Bool = true
 
@@ -114,11 +131,43 @@ final class AppLibrary: ObservableObject {
         badgeStates[appName.lowercased()]
     }
 
-    // MARK: - Trash actions (called from DockItemView context menu)
+    // MARK: - Trash actions (used by dock Trash icon pill, context menu, and settings)
 
     func openTrash() {
         let trashURL = URL(fileURLWithPath: (NSHomeDirectory() as NSString).appendingPathComponent(".Trash"))
         NSWorkspace.shared.open(trashURL)
+    }
+
+    /// Direct (no alert) empty via AppleScript + update state. Used by the
+    /// compact "Empty" pill and the right-click context menu on the Trash icon.
+    func emptyTrashDirectly() {
+        let script = "tell application \"Finder\" to empty the trash"
+        if let appleScript = NSAppleScript(source: script) {
+            _ = appleScript.executeAndReturnError(nil)
+            DispatchQueue.main.async {
+                self.trashIsEmpty = true
+            }
+        }
+    }
+
+    /// Called when user drags an app from Finder onto the dock.
+    /// Supports dropping .app bundles from /Applications or elsewhere.
+    func addDroppedItem(from url: URL) {
+        let resolved = url.resolvingSymlinksInPath()
+        let path = resolved.path
+
+        guard resolved.pathExtension.lowercased() == "app" else { return }
+
+        // Avoid duplicates
+        if items.contains(where: { item in
+            if case .app(let a) = item { return a.path == path }
+            return false
+        }) { return }
+
+        let name = resolved.deletingPathExtension().lastPathComponent
+        let entry = AppEntry(id: UUID(), path: path, name: name)
+        items.append(.app(entry))
+        save()
     }
 
     func emptyTrash() {
@@ -202,16 +251,25 @@ final class AppLibrary: ObservableObject {
         var folder: FolderEntry?
     }
 
+    /// New persisted container (v2+) that holds both pinned items and user
+    /// divider bars. Old saves were a bare array of PersistedItem; we still
+    /// read those for backward compatibility.
+    private struct PersistedLibrary: Codable {
+        var items: [PersistedItem]
+        var dividers: [DockDividerBar] = []
+    }
+
     private func save() {
         if suppressSave { return }
         let writtenDockID = activeDockID
-        let persisted: [PersistedItem] = items.map { item in
+        let itemPersisted: [PersistedItem] = items.map { item in
             switch item {
             case .app(let a): return PersistedItem(kind: "app", app: a, folder: nil)
             case .folder(let f): return PersistedItem(kind: "folder", app: nil, folder: f)
             }
         }
-        if let data = try? JSONEncoder().encode(persisted) {
+        let container = PersistedLibrary(items: itemPersisted, dividers: dividers)
+        if let data = try? JSONEncoder().encode(container) {
             try? data.write(to: storageURL)
         }
         NotificationCenter.default.post(
@@ -222,14 +280,31 @@ final class AppLibrary: ObservableObject {
     }
 
     private func load() {
-        guard let data = try? Data(contentsOf: storageURL),
-              let persisted = try? JSONDecoder().decode([PersistedItem].self, from: data) else { return }
-        items = persisted.compactMap { p in
-            switch p.kind {
-            case "app": return p.app.map { .app($0) }
-            case "folder": return p.folder.map { .folder($0) }
-            default: return nil
+        guard let data = try? Data(contentsOf: storageURL) else { return }
+
+        // Try new container format first.
+        if let container = try? JSONDecoder().decode(PersistedLibrary.self, from: data) {
+            items = container.items.compactMap { p in
+                switch p.kind {
+                case "app": return p.app.map { .app($0) }
+                case "folder": return p.folder.map { .folder($0) }
+                default: return nil
+                }
             }
+            dividers = container.dividers
+            return
+        }
+
+        // Backward compat: bare array of PersistedItem (pre-divider era).
+        if let oldItems = try? JSONDecoder().decode([PersistedItem].self, from: data) {
+            items = oldItems.compactMap { p in
+                switch p.kind {
+                case "app": return p.app.map { .app($0) }
+                case "folder": return p.folder.map { .folder($0) }
+                default: return nil
+                }
+            }
+            dividers = []
         }
     }
 
@@ -262,10 +337,29 @@ final class AppLibrary: ObservableObject {
 
     func removeItem(id: UUID) {
         items.removeAll { $0.id == id }
+        // Clean any divider that was placed after the removed item.
+        dividers.removeAll { $0.afterItemID == id }
     }
 
     func launch(_ app: AppEntry) {
         NSWorkspace.shared.open(URL(fileURLWithPath: app.path))
+    }
+
+    // MARK: - Divider helpers (used by Edit Dock mode)
+
+    /// Insert a new visual divider bar after the given item (or at the start if after == nil).
+    func insertDivider(after afterID: UUID?) {
+        let d = DockDividerBar(afterItemID: afterID)
+        // Avoid exact duplicates at same spot (simple guard).
+        if !dividers.contains(where: { $0.afterItemID == afterID }) {
+            dividers.append(d)
+        } else {
+            dividers.append(d) // allow stacking multiple dividers if user wants
+        }
+    }
+
+    func removeDivider(id: UUID) {
+        dividers.removeAll { $0.id == id }
     }
 
     /// Combine two top-level items: if both apps, create a new folder; if target is folder, drop the app in; etc.

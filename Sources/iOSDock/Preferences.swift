@@ -12,11 +12,13 @@ final class Preferences: ObservableObject {
     let dockID: UUID?
 
     private let defaults = UserDefaults.standard
+    private var systemColorObserver: NSObjectProtocol?
     private let kDockIcon = "showDockIcon"
     private let kMenuBar = "showMenuBarIcon"
     private let kEdge = "dockEdge"
     private let kEditing = "isEditingLayout"
     private let kEditingDocks = "isEditingDocks"
+    private let kEditingDividers = "isEditingDividers"
     private let kIconSize = "iconSize"
     private let kSpacing = "spacing"
     private let kMagnify = "magnifyOnHover"
@@ -102,12 +104,31 @@ final class Preferences: ObservableObject {
             NotificationCenter.default.addObserver(
                 self, selector: #selector(handleEditingDockChanged),
                 name: ProfileManager.editingDockChanged, object: nil)
+
+            // Observe macOS system accent color / highlight color changes (user changes
+            // it in System Settings > Appearance) so that active-item glows and frontmost
+            // indicators update live without requiring app restart.
+            systemColorObserver = NotificationCenter.default.addObserver(
+                forName: NSColor.systemColorsDidChangeNotification,
+                object: nil,
+                queue: .main
+            ) { [weak self] _ in
+                guard let self else { return }
+                self._tick &+= 1
+                NotificationCenter.default.post(name: Self.changed, object: nil)
+            }
         }
     }
 
     @objc private func handleEditingDockChanged() {
         _tick &+= 1
         NotificationCenter.default.post(name: Self.changed, object: nil)
+    }
+
+    deinit {
+        if let obs = systemColorObserver {
+            NotificationCenter.default.removeObserver(obs)
+        }
     }
 
     @Published var _tick: Int = 0
@@ -140,7 +161,7 @@ final class Preferences: ObservableObject {
              edgeOffset, showFinder, showTrash,
              autoHideDock, bounceOnLaunch, showRunningIndicators, indicatorStyle, showRecentApps,
              fillWidth, paddingUniform, dockScale,
-             isEditingLayout, isEditingDocks
+             isEditingLayout, isEditingDocks, isEditingDividers
     }
 
     /// Plain-Any defaults for primitives; the RGBA ones are handled specially in `reset(_:)`.
@@ -156,7 +177,7 @@ final class Preferences: ObservableObject {
         .autoHideDock: true, .bounceOnLaunch: true, .showRunningIndicators: true, .indicatorStyle: "glow", .showRecentApps: false,
         .fillWidth: true, .paddingUniform: false,
         .dockScale: 1.0,
-        .isEditingLayout: false, .isEditingDocks: false
+        .isEditingLayout: false, .isEditingDocks: false, .isEditingDividers: false
     ]
 
     func reset(_ key: Key) {
@@ -402,6 +423,14 @@ final class Preferences: ObservableObject {
         get { defaults.bool(forKey: kEditingDocks) }
         set {
             defaults.set(newValue, forKey: kEditingDocks)
+            _tick &+= 1
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+        }
+    }
+    var isEditingDividers: Bool {
+        get { defaults.bool(forKey: kEditingDividers) }
+        set {
+            defaults.set(newValue, forKey: kEditingDividers)
             _tick &+= 1
             NotificationCenter.default.post(name: Self.changed, object: nil)
         }
