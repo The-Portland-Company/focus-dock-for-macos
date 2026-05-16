@@ -276,6 +276,11 @@ final class DockWindowController: NSWindowController, NSWindowDelegate {
         let shouldHide = prefs.autoHideDock && !prefs.isEditingLayout && isAutoHidden
         let target = shouldHide ? hiddenFrame(from: frame, edge: edge, on: screen) : frame
         win.setFrame(target, display: true, animate: false)
+
+        // Notify that the dock just auto-hid (so any open folder popovers can close)
+        if shouldHide {
+            NotificationCenter.default.post(name: .dockDidAutoHide, object: nil)
+        }
     }
 
     // MARK: - Auto-hide
@@ -786,6 +791,7 @@ struct DockView: View {
         .environment(\.dockMagnifyEnabled, prefs.magnifyOnHover)
         .environment(\.dockMagnifyMax, magnifyMax)
         .environment(\.dockLeadingPad, CGFloat(isVertical ? prefs.effectivePaddingTop : prefs.effectivePaddingLeft))
+        .environment(\.dockFrontmostPath, runningApps.frontmostPath)
     }
 
     /// Pick the item under the cursor (by frame in "dock" space) and show
@@ -833,9 +839,9 @@ struct DockView: View {
                     dragState: dragState
                 )
             case .runningApp(let entry):
-                RunningAppTileView(entry: entry, iconSize: iconSize)
+                RunningAppTileView(entry: entry, iconSize: iconSize, index: idx, spacing: spacing)
             case .minimized(let window):
-                MinimizedTileView(window: window, iconSize: iconSize, isVertical: isVertical)
+                MinimizedTileView(window: window, iconSize: iconSize, index: idx, spacing: spacing, isVertical: isVertical)
             case .divider, .runningDivider:
                 DockDivider(isVertical: isVertical, iconSize: iconSize)
             }
@@ -852,17 +858,24 @@ struct DockView: View {
 struct MinimizedTileView: View {
     let window: MinimizedWindow
     let iconSize: CGFloat
+    let index: Int
+    let spacing: CGFloat
     let isVertical: Bool
 
     @Environment(\.dockHoverPoint) private var hoverPoint
     @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
     @Environment(\.dockMagnifyMax) private var magnifyMax
+    @Environment(\.dockLeadingPad) private var leadingPad
+
+    private var restingCenterAlongAxis: CGFloat {
+        leadingPad + CGFloat(index) * (iconSize + spacing) + iconSize / 2
+    }
 
     private var magnificationScale: CGFloat {
         guard magnifyEnabled, let hp = hoverPoint else { return 1 }
         let mouse = isVertical ? hp.y : hp.x
-        let dist = abs(mouse - (isVertical ? 450 : 1350))
-        let sigma = iconSize * 2.0
+        let dist = abs(mouse - restingCenterAlongAxis)
+        let sigma = iconSize * 1.8
         let g = exp(-(dist * dist) / (2 * sigma * sigma))
         let maxScale = max(1.0, magnifyMax / iconSize)
         return 1 + (maxScale - 1) * g * 0.9
@@ -921,37 +934,53 @@ struct MinimizedTileView: View {
 struct RunningAppTileView: View {
     let entry: RunningAppEntry
     let iconSize: CGFloat
+    let index: Int
+    let spacing: CGFloat
 
     @EnvironmentObject var prefs: Preferences
     @Environment(\.dockHoverPoint) private var hoverPoint
     @Environment(\.dockIsVertical) private var isVertical
     @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
     @Environment(\.dockMagnifyMax) private var magnifyMax
+    @Environment(\.dockLeadingPad) private var leadingPad
+    @Environment(\.dockFrontmostPath) private var frontmostPath
+
+    private var isActive: Bool {
+        entry.path == frontmostPath
+    }
+
+    private var restingCenterAlongAxis: CGFloat {
+        leadingPad + CGFloat(index) * (iconSize + spacing) + iconSize / 2
+    }
 
     private var magnificationScale: CGFloat {
         guard magnifyEnabled, let hp = hoverPoint else { return 1 }
-        // Running apps are usually at the end of the dock.
-        // We use a simple but effective distance-based scale.
         let mouse = isVertical ? hp.y : hp.x
-        // Approximate center of this tile (we don't have exact index here,
-        // so we use a broad falloff that feels good for the recent section)
-        let dist = abs(mouse - (isVertical ? 400 : 1200)) // rough center bias for recent section
-        let sigma = iconSize * 2.2
+        let dist = abs(mouse - restingCenterAlongAxis)
+        // Falloff tuned for secondary section (slightly softer)
+        let sigma = iconSize * 1.8
         let g = exp(-(dist * dist) / (2 * sigma * sigma))
         let maxScale = max(1.0, magnifyMax / iconSize)
-        return 1 + (maxScale - 1) * g * 0.85   // slightly softer than main items
+        return 1 + (maxScale - 1) * g * 0.85
     }
 
     var body: some View {
         let scale = magnificationScale
         let displaySize = iconSize * scale
+        let style = prefs.openAppVisualStyle
 
         VStack(spacing: 4) {
             Image(nsImage: entry.icon)
                 .resizable()
                 .interpolation(.high)
                 .frame(width: displaySize, height: displaySize)
-            if prefs.showRunningIndicators {
+                .if(style == .glowAndDarken && isActive) { view in
+                    view.shadow(color: Color.accentColor.opacity(0.75), radius: 8, x: 0, y: 0)
+                }
+                .if(style == .glowAndDarken && !isActive) { view in
+                    view.opacity(0.6)
+                }
+            if prefs.showRunningIndicators && style == .dot {
                 Circle()
                     .fill(Color.primary.opacity(0.6))
                     .frame(width: 4 * scale, height: 4 * scale)
@@ -1034,7 +1063,18 @@ private struct DockIsVerticalKey: EnvironmentKey { static let defaultValue: Bool
 private struct DockMagnifyEnabledKey: EnvironmentKey { static let defaultValue: Bool = true }
 private struct DockMagnifyMaxKey: EnvironmentKey { static let defaultValue: CGFloat = 110 }
 private struct DockLeadingPadKey: EnvironmentKey { static let defaultValue: CGFloat = 0 }
+private struct DockFrontmostPathKey: EnvironmentKey { static let defaultValue: String? = nil }
 private struct DockIDKey: EnvironmentKey { static let defaultValue: UUID? = nil }
+
+extension View {
+    @ViewBuilder func `if`<Content: View>(_ condition: Bool, transform: (Self) -> Content) -> some View {
+        if condition {
+            transform(self)
+        } else {
+            self
+        }
+    }
+}
 
 extension EnvironmentValues {
     var dockHoverPoint: CGPoint? {
@@ -1056,6 +1096,11 @@ extension EnvironmentValues {
     var dockLeadingPad: CGFloat {
         get { self[DockLeadingPadKey.self] }
         set { self[DockLeadingPadKey.self] = newValue }
+    }
+
+    var dockFrontmostPath: String? {
+        get { self[DockFrontmostPathKey.self] }
+        set { self[DockFrontmostPathKey.self] = newValue }
     }
 
     var dockID: UUID? {
@@ -1097,6 +1142,14 @@ struct DockItemView: View {
 
     @State private var frameInDock: CGRect = .zero
     @State private var showFolderPopover: Bool = false
+
+    // Automatically close any open folder popover when the user starts dragging
+    // or enters Edit Layout mode (good UX, prevents confusing states).
+    private func closeFolderPopoverIfNeeded() {
+        if showFolderPopover && (prefs.isEditingLayout || dragState.draggingID != nil) {
+            showFolderPopover = false
+        }
+    }
     @State private var folderFormProgress: CGFloat = 0
     @EnvironmentObject var prefs: Preferences
     @Environment(\.dockHoverPoint) private var hoverPoint
@@ -1104,6 +1157,7 @@ struct DockItemView: View {
     @Environment(\.dockMagnifyEnabled) private var magnifyEnabled
     @Environment(\.dockMagnifyMax) private var magnifyMax
     @Environment(\.dockLeadingPad) private var leadingPad
+    @Environment(\.dockFrontmostPath) private var frontmostPath
 
     /// Resting center of this item along the dock axis. Derived purely from
     /// layout inputs (padding + index*(icon+spacing) + icon/2) so that
@@ -1197,11 +1251,24 @@ struct DockItemView: View {
             if prefs.labelMode == .below {
                 labelText
             }
-            // Running-app indicator dot (when enabled).
-            if prefs.showRunningIndicators, isAppRunning {
-                Circle()
-                    .fill(Color.primary.opacity(0.6))
-                    .frame(width: 4, height: 4)
+
+            // Open app visual treatment
+            let style = prefs.openAppVisualStyle
+            if isAppRunning {
+                if style == .glowAndDarken {
+                    // Glow for active, darken for inactive open apps (no dot)
+                    if isActiveApp {
+                        Circle()
+                            .fill(Color.accentColor.opacity(0.0))
+                            .frame(width: iconSize * 1.15, height: iconSize * 1.15)
+                            .shadow(color: Color.accentColor.opacity(0.7), radius: 7, x: 0, y: 0)
+                    }
+                } else if prefs.showRunningIndicators {
+                    // Classic dot
+                    Circle()
+                        .fill(Color.primary.opacity(0.6))
+                        .frame(width: 4, height: 4)
+                }
             }
         }
         .coordinateSpace(name: "item-\(item.id)")
@@ -1226,17 +1293,33 @@ struct DockItemView: View {
                 // Exit edit mode on tap in empty-ish area; for now, tapping launches
             }
             switch item {
-            case .app(let a): library.launch(a)
-            case .folder: showFolderPopover.toggle()
+            case .app(let a):
+                library.launch(a)
+            case .folder:
+                if showFolderPopover {
+                    // Tapping the same folder again → close it (toggle behavior)
+                    showFolderPopover = false
+                } else {
+                    // Small delay helps ensure any previous popover has fully closed
+                    DispatchQueue.main.asyncAfter(deadline: .now() + 0.04) {
+                        showFolderPopover = true
+                    }
+                }
             }
         }
-        .popover(isPresented: $showFolderPopover, arrowEdge: .top) {
-            if case .folder(let f) = item {
-                FolderPopover(folder: f)
-                    .environmentObject(library)
-                    .environmentObject(prefs)
+        .contextMenu {
+            if isTrash {
+                Button("Empty Trash") {
+                    library.emptyTrash()
+                }
+                .disabled(library.trashIsEmpty)
+
+                Button("Open Trash") {
+                    library.openTrash()
+                }
             }
         }
+        // Folder popover is handled via a transient NSPopover (see iconContent)
     }
 
     @ViewBuilder private func iconContent(size: CGFloat) -> some View {
@@ -1248,6 +1331,34 @@ struct DockItemView: View {
                 .frame(width: size, height: size)
         case .folder(let f):
             FolderIconView(folder: f, size: size)
+                .background(
+                    FolderPopoverPresenter(
+                        isPresented: $showFolderPopover,
+                        arrowEdge: .top,
+                        content: {
+                            FolderPopover(folder: f)
+                                .environmentObject(library)
+                                .environmentObject(prefs)
+                                .environment(\.dockFrontmostPath, frontmostPath)
+                        }
+                    )
+                )
+                .onChange(of: prefs.isEditingLayout) { _ in
+                    if showFolderPopover { showFolderPopover = false }
+                }
+                .onChange(of: dragState.draggingID) { newValue in
+                    if showFolderPopover, newValue != nil {
+                        // Small delay so very short / accidental drags don't instantly close the popover
+                        DispatchQueue.main.asyncAfter(deadline: .now() + 0.12) {
+                            if showFolderPopover {
+                                showFolderPopover = false
+                            }
+                        }
+                    }
+                }
+                .onReceive(NotificationCenter.default.publisher(for: .dockDidAutoHide)) { _ in
+                    if showFolderPopover { showFolderPopover = false }
+                }
         }
     }
 
@@ -1286,6 +1397,19 @@ struct DockItemView: View {
             guard let bundleURL = app.bundleURL?.resolvingSymlinksInPath() else { return false }
             return bundleURL == url
         }
+    }
+
+    private var isActiveApp: Bool {
+        guard case .app(let a) = item else { return false }
+        guard let front = frontmostPath else { return false }
+        let url = URL(fileURLWithPath: a.path).resolvingSymlinksInPath().path
+        return front == url
+    }
+
+    private var isTrash: Bool {
+        guard case .app(let a) = item else { return false }
+        let trashPath = (NSHomeDirectory() as NSString).appendingPathComponent(".Trash")
+        return a.path == trashPath
     }
 
     private var labelText: some View {
@@ -1485,14 +1609,32 @@ struct FolderIconView: View {
     let folder: FolderEntry
     let size: CGFloat
 
+    @EnvironmentObject var prefs: Preferences
+    @Environment(\.dockFrontmostPath) private var frontmostPath
+
+    private var containsActiveApp: Bool {
+        guard let front = frontmostPath else { return false }
+        return folder.apps.contains { $0.path == front }
+    }
+
+    private var isActiveStyle: Bool {
+        prefs.openAppVisualStyle == .glowAndDarken
+    }
+
     var body: some View {
         ZStack {
+            let baseFill = Color.primary.opacity(0.18)
+            let baseStroke = Color.primary.opacity(0.22)
+
             RoundedRectangle(cornerRadius: 14, style: .continuous)
-                .fill(Color.primary.opacity(0.18))
+                .fill(baseFill)
                 .overlay(
                     RoundedRectangle(cornerRadius: 14, style: .continuous)
-                        .strokeBorder(Color.primary.opacity(0.22), lineWidth: 0.5)
+                        .strokeBorder(baseStroke, lineWidth: 0.5)
                 )
+                .if(isActiveStyle && containsActiveApp) { view in
+                    view.shadow(color: Color.accentColor.opacity(0.65), radius: 10, x: 0, y: 0)
+                }
 
             let grid = Array(folder.apps.prefix(9))
             let cell = (size - 18) / 3
@@ -1525,6 +1667,7 @@ struct FolderPopover: View {
     let folder: FolderEntry
     @EnvironmentObject var library: AppLibrary
     @EnvironmentObject var prefs: Preferences
+    @Environment(\.dockFrontmostPath) private var frontmostPath
     @State private var editingName: Bool = false
     @State private var draftName: String = ""
 
@@ -1539,6 +1682,11 @@ struct FolderPopover: View {
     private let cellSpacing: CGFloat = 14
 
     var body: some View {
+        let leftPad = prefs.effectivePaddingLeft
+        let rightPad = prefs.effectivePaddingRight
+        let topPad = prefs.effectivePaddingTop
+        let bottomPad = prefs.effectivePaddingBottom
+
         let cols = Array(repeating: GridItem(.fixed(cellSize + 16), spacing: cellSpacing), count: resolvedColumns)
 
         VStack(alignment: .leading, spacing: 10) {
@@ -1549,8 +1697,15 @@ struct FolderPopover: View {
                 }
             }
         }
-        .padding(16)
-        .frame(width: CGFloat(resolvedColumns) * (cellSize + 16) + CGFloat(max(0, resolvedColumns - 1)) * cellSpacing + 32)
+        .padding(.top, topPad)
+        .padding(.bottom, bottomPad)
+        .padding(.leading, leftPad)
+        .padding(.trailing, rightPad)
+        .frame(
+            width: CGFloat(resolvedColumns) * (cellSize + 16) +
+                   CGFloat(max(0, resolvedColumns - 1)) * cellSpacing +
+                   leftPad + rightPad
+        )
     }
 
     private var header: some View {
@@ -1582,12 +1737,17 @@ struct FolderPopover: View {
 
     @ViewBuilder
     private func folderAppCell(_ app: AppEntry) -> some View {
+        let isActive = (app.path == frontmostPath) && prefs.openAppVisualStyle == .glowAndDarken
+
         VStack(spacing: 4) {
             if prefs.labelMode == .above {
                 cellLabel(app)
             }
-            Image(nsImage: app.icon).resizable().interpolation(.high)
+            Image(nsImage: app.icon)
+                .resizable()
+                .interpolation(.high)
                 .frame(width: cellSize, height: cellSize)
+                .if(isActive) { $0.shadow(color: Color.accentColor.opacity(0.7), radius: 8, x: 0, y: 0) }
                 .nativeToolTip(prefs.labelMode == .tooltip ? app.name : "")
             if prefs.labelMode == .below {
                 cellLabel(app)
@@ -1601,6 +1761,110 @@ struct FolderPopover: View {
     private func cellLabel(_ app: AppEntry) -> some View {
         Text(app.name).font(.system(size: 10)).lineLimit(1)
             .frame(maxWidth: cellSize + 16)
+    }
+}
+
+// MARK: - Transient Folder Popover Presenter
+
+/// Presents a FolderPopover as an NSPopover with .transient behavior.
+/// This ensures the popover automatically closes when the user clicks anywhere
+/// outside of it (including the desktop or other dock items).
+struct FolderPopoverPresenter<Content: View>: NSViewRepresentable {
+    @Binding var isPresented: Bool
+    let arrowEdge: Edge
+    let content: () -> Content
+
+    func makeNSView(context: Context) -> NSView {
+        let view = NSView()
+        return view
+    }
+
+    func updateNSView(_ nsView: NSView, context: Context) {
+        if isPresented {
+            context.coordinator.showPopover(from: nsView)
+        } else {
+            context.coordinator.hidePopover()
+        }
+    }
+
+    func makeCoordinator() -> Coordinator {
+        Coordinator(isPresented: $isPresented, arrowEdge: arrowEdge, content: content)
+    }
+
+    final class Coordinator: NSObject, NSPopoverDelegate {
+        @Binding var isPresented: Bool
+        let arrowEdge: Edge
+        let content: () -> Content
+
+        private var popover: NSPopover?
+
+        init(isPresented: Binding<Bool>, arrowEdge: Edge, content: @escaping () -> Content) {
+            self._isPresented = isPresented
+            self.arrowEdge = arrowEdge
+            self.content = content
+        }
+
+        func showPopover(from view: NSView) {
+            guard popover == nil else { return }
+
+            let hostingController = NSHostingController(rootView: content())
+            hostingController.view.alphaValue = 0
+            hostingController.view.layer?.anchorPoint = CGPoint(x: 0.5, y: 0.5)
+
+            let popover = NSPopover()
+            popover.contentViewController = hostingController
+            popover.behavior = .transient
+            popover.delegate = self
+
+            let preferredEdge: NSRectEdge = switch arrowEdge {
+            case .top:    .maxY
+            case .bottom: .minY
+            case .leading: .minX
+            case .trailing: .maxX
+            }
+
+            popover.show(relativeTo: view.bounds, of: view, preferredEdge: preferredEdge)
+            self.popover = popover
+
+            // Nice springy scale + fade in animation
+            NSAnimationContext.runAnimationGroup { context in
+                context.duration = 0.28
+                context.timingFunction = CAMediaTimingFunction(controlPoints: 0.25, 0.1, 0.25, 1.0) // nice ease
+                hostingController.view.animator().alphaValue = 1.0
+                hostingController.view.animator().layer?.setAffineTransform(CGAffineTransform(scaleX: 0.92, y: 0.92))
+            } completionHandler: {
+                NSAnimationContext.runAnimationGroup { ctx in
+                    ctx.duration = 0.18
+                    ctx.timingFunction = CAMediaTimingFunction(name: .easeOut)
+                    hostingController.view.animator().layer?.setAffineTransform(.identity)
+                }
+            }
+        }
+
+        func hidePopover() {
+            guard let popover = popover else { return }
+
+            // Gentle scale + fade out before closing
+            if let hosting = popover.contentViewController?.view {
+                NSAnimationContext.runAnimationGroup { context in
+                    context.duration = 0.16
+                    context.timingFunction = CAMediaTimingFunction(name: .easeIn)
+                    hosting.animator().alphaValue = 0.0
+                    hosting.animator().layer?.setAffineTransform(CGAffineTransform(scaleX: 0.95, y: 0.95))
+                } completionHandler: {
+                    popover.close()
+                    self.popover = nil
+                }
+            } else {
+                popover.close()
+                self.popover = nil
+            }
+        }
+
+        func popoverDidClose(_ notification: Notification) {
+            isPresented = false
+            popover = nil
+        }
     }
 }
 
@@ -1625,6 +1889,10 @@ extension View {
     func nativeToolTip(_ text: String) -> some View {
         background(ToolTipView(text: text).allowsHitTesting(false))
     }
+}
+
+extension Notification.Name {
+    static let dockDidAutoHide = Notification.Name("FocusDock.DidAutoHide")
 }
 
 // MARK: - Registry-updating GeometryReader extension
