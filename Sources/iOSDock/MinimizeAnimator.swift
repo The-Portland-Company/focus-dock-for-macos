@@ -107,7 +107,9 @@ final class MinimizeAnimator {
             bundlePaths[cgWindowID] = path
             // Hide the real window so the OS's own minimize animation plays on
             // an invisible target — only our custom overlay is visible.
-            _ = CGSSetWindowAlpha(CGSMainConnectionID(), cgWindowID, 0)
+            let cid = CGSMainConnectionID()
+            let alphaResult = CGSSetWindowAlpha(cid, cgWindowID, 0)
+            Self.log.info("CGSSetWindowAlpha wid=\(cgWindowID) cid=\(cid) result=\(alphaResult)")
         }
 
         guard let target = DockTargetLocator.frame(forAppPath: path) else {
