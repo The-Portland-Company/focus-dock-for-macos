@@ -5,10 +5,10 @@ import AppKit
 #if !APPSTORE
 
 /// The Mission-Control-style bar hosted in each DesktopStripPanel: one tile
-/// per Space of THAT panel's display, in flat SkyLight order. M2 renders
-/// wallpaper-ish gradient placeholders (real screenshots land in M4) and the
-/// tiles are dimmed/non-switchable (switching lands in M3) — but inline
-/// rename already works.
+/// per Space of THAT panel's display, in flat SkyLight order. M3: clicking a
+/// tile switches to that Space (SpaceSwitcher via the facade); tiles are only
+/// dimmed/non-switchable when Accessibility is missing. Still gradient
+/// placeholders — real screenshots land in M4.
 struct DesktopStripView: View {
     @ObservedObject var model: SpacesModel
     @ObservedObject var uiState: DesktopStripUIState
@@ -111,15 +111,24 @@ private struct SpaceTileView: View {
             }
         }
         .frame(width: tileWidth, height: thumbHeight)
-        // Dimmed + non-interactive: canSwitch is always false in M2 (real
-        // switching is M3) — but rename below still works.
-        .opacity(0.8)
+        // Dimmed + non-interactive only when Accessibility is missing
+        // (SpaceSwitcher can't post key events without it). Rename below
+        // works either way.
+        .opacity(SpaceSwitcher.canSwitch ? 1.0 : 0.55)
         .clipShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
         .overlay(
             RoundedRectangle(cornerRadius: 9, style: .continuous)
                 .strokeBorder(ringColor, lineWidth: ringWidth)
         )
-        .allowsHitTesting(false)
+        .contentShape(RoundedRectangle(cornerRadius: 9, style: .continuous))
+        .onTapGesture {
+            guard SpaceSwitcher.canSwitch else { return }
+            DesktopStripFeature.requestSwitch(to: space.uuid)
+        }
+        .allowsHitTesting(SpaceSwitcher.canSwitch)
+        .help(SpaceSwitcher.canSwitch
+              ? "Click to switch to this desktop"
+              : "Grant Accessibility permission to switch desktops")
     }
 
     /// Wallpaper-ish blue/purple gradient, hue-shifted per desktop number so

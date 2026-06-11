@@ -12,10 +12,12 @@ import notify
 /// and never need #if APPSTORE. Under APPSTORE everything is a no-op and
 /// `isAvailable` is false.
 ///
-/// M2 scope: read-only strip overlay (gradient placeholders + inline rename)
-/// behind the `desktopStripEnabled` preference. Real switching, thumbnails
-/// and Mission Control interception arrive in M3–M5; teardown/selfHeal get
-/// real bodies in M3 when system state (symbolic hotkeys) is first modified.
+/// M3 scope: the strip switches real Spaces. While the feature is enabled
+/// (and `desktopStripManageHotkeys` is on, and Accessibility is granted) the
+/// system "Switch to Desktop N" hotkeys are snapshot-then-enabled so
+/// SpaceSwitcher can post Ctrl+N; they are restored on quit/disable and
+/// self-healed at launch after a crash. Real thumbnails and Mission Control
+/// interception arrive in M4/M5.
 enum DesktopStripFeature {
     private static let log = Logger(subsystem: "com.theportlandcompany.FocusDock", category: "Spaces")
 
@@ -57,6 +59,7 @@ enum DesktopStripFeature {
     static func applySettings() {
         #if !APPSTORE
         startModelIfNeeded()
+        defer { reconcileHotkeys() }
         guard Preferences.shared.desktopStripEnabled, isAvailable, let model else {
             controller?.hide()
             controller = nil
@@ -68,17 +71,30 @@ enum DesktopStripFeature {
         #endif
     }
 
-    /// Restores any system state we changed (symbolic hotkeys — M3) and
-    /// dismisses the overlay. Idempotent.
+    /// Restores any system state we changed (the "Switch to Desktop N"
+    /// symbolic hotkeys) and dismisses the overlay. Idempotent — safe to call
+    /// from both terminate delegate paths AND the QuitBackstop atexit/signal
+    /// handlers (UI teardown is skipped off the main thread; the prefs
+    /// restore is what matters at process death).
     static func teardownForQuit() {
         #if !APPSTORE
-        controller?.hide()
+        if Thread.isMainThread {
+            controller?.hide()
+            controller = nil
+        }
+        SymbolicHotKeysManager.restore()
         #endif
     }
 
-    /// Launch-time recovery after a crash/force-quit left system state
-    /// modified. Real body in M3 (nothing persistent is changed yet).
-    static func selfHealIfStale() {}
+    /// Launch-time recovery: if a previous session crashed/was force-quit
+    /// while the symbolic hotkeys were managed, restore the user's originals
+    /// before this launch (re-)enables them. Mirrors
+    /// `SystemDockManager.selfHealIfStaleHide()`.
+    static func selfHealIfStale() {
+        #if !APPSTORE
+        SymbolicHotKeysManager.selfHealIfStale()
+        #endif
+    }
 
     /// Shows/hides the desktop strip overlay (status-menu "Show Desktops",
     /// later the intercepted Mission Control keys). Lazily creates the
@@ -97,15 +113,54 @@ enum DesktopStripFeature {
         #endif
     }
 
-    /// M3 hook: switch macOS to the given space (SpaceSwitcher). M2 logs only —
-    /// the strip's Return key and (later) tile clicks route through here.
+    /// Switches macOS to the given space. Routed here by tile clicks and the
+    /// strip's Return key. Mission Control hides after selection — same here:
+    /// hide the strip first, then switch (the panels survive the space change
+    /// anyway via .canJoinAllSpaces, but visually MC-dismissal feels right).
     static func requestSwitch(to uuid: String) {
         #if !APPSTORE
-        log.info("requestSwitch(to: \(uuid, privacy: .public)) — real switching lands in M3")
+        guard SpaceSwitcher.canSwitch else {
+            log.warning("requestSwitch(\(uuid, privacy: .public)) ignored: Accessibility not granted")
+            return
+        }
+        // Resolve the target space + owning display from a FRESH fetch (the
+        // layout may have changed since the strip was built).
+        let displays = SpacesBridge.fetchDisplaySpaces()
+        guard let display = displays.first(where: { d in d.spaces.contains { $0.uuid == uuid } }),
+              let space = display.spaces.first(where: { $0.uuid == uuid }) else {
+            log.error("requestSwitch(\(uuid, privacy: .public)): space not found in current layout")
+            return
+        }
+        controller?.hide()
+        SpaceSwitcher.switchTo(space: space, on: display) { success in
+            log.info("requestSwitch(\(uuid, privacy: .public)) → \(success ? "switched" : "FAILED", privacy: .public)")
+            model?.refresh()
+        }
         #endif
     }
 
     #if !APPSTORE
+    /// Brings the managed symbolic-hotkey state in line with the current
+    /// preferences + permissions + desktop count:
+    /// - feature on + hotkey management on + AX trusted → snapshot once and
+    ///   enable Ctrl+1…N for the current desktop count (re-written live when
+    ///   desktops are added/removed — the model sink calls this on refresh).
+    /// - anything off → restore the user's original hotkey values.
+    private static func reconcileHotkeys() {
+        let wantManaged = Preferences.shared.desktopStripEnabled
+            && Preferences.shared.desktopStripManageHotkeys
+            && isAvailable
+            && SpaceSwitcher.canSwitch
+        let desiredCount = min(9, model?.desktopSpaces.count ?? 0)
+        if wantManaged && desiredCount > 0 {
+            if SymbolicHotKeysManager.managedCount != desiredCount {
+                SymbolicHotKeysManager.enableSwitchHotkeys(count: desiredCount)
+            }
+        } else if SymbolicHotKeysManager.hasSnapshot {
+            SymbolicHotKeysManager.restore()
+        }
+    }
+
     private static func startModelIfNeeded() {
         guard model == nil else { return }
         let model = SpacesModel()
@@ -115,10 +170,14 @@ enum DesktopStripFeature {
         }
         Self.model = model
         // @Published emits the current value on subscribe, so the initial
-        // layout is logged immediately, then again on every refresh.
+        // layout is logged immediately, then again on every refresh. The
+        // reconcile keeps the managed Ctrl+N count in sync when desktops are
+        // added/removed (cheap no-op otherwise).
         logSink = model.$displays.sink { displays in
             logSnapshot(displays)
+            reconcileHotkeys()
         }
+        log.info("desktop strip: AXIsProcessTrusted=\(SpaceSwitcher.canSwitch)")
     }
 
     /// DEBUG automation hook: `notifyutil -p
@@ -135,6 +194,14 @@ enum DesktopStripFeature {
             DispatchQueue.main
         ) { _ in
             DesktopStripFeature.toggleStrip()
+        }
+        var walkToken: Int32 = 0
+        notify_register_dispatch(
+            "com.theportlandcompany.FocusDock.debug.walkRight",
+            &walkToken,
+            DispatchQueue.main
+        ) { _ in
+            SpaceSwitcher.debugWalkRight()
         }
         #endif
     }

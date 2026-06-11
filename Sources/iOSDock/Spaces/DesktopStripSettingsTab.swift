@@ -1,17 +1,22 @@
 import SwiftUI
+import ApplicationServices
 
 // Compiled out of the App Store build; SettingsView gates both the compile
 // (#if !APPSTORE) and the runtime visibility (DesktopStripFeature.isAvailable)
 // so the tab never appears there.
 #if !APPSTORE
 
-/// "Desktops" settings tab — M2 skeleton: master toggle + rename list.
-/// Permission rows, the Mission-Control-interception toggle and the
-/// hotkey-management toggle arrive with M3/M5.
+/// "Desktops" settings tab — M3: master toggle, desktop-switching section
+/// (Accessibility permission row + managed-hotkeys toggle) and the rename
+/// list. The Mission-Control-interception toggle arrives with M5.
 struct DesktopStripSettingsTab: View {
     @EnvironmentObject var prefs: Preferences
     /// Own observable snapshot — refreshes itself on space/screen changes.
     @StateObject private var model = SpacesModel()
+    /// Silent AX check (BadgeMonitor pattern): re-evaluated on appear and on
+    /// a slow timer so granting permission in System Settings updates the row.
+    @State private var axTrusted = AXIsProcessTrusted()
+    private let axRecheck = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
         Form {
@@ -20,7 +25,35 @@ struct DesktopStripSettingsTab: View {
                     get: { prefs.desktopStripEnabled },
                     set: { prefs.desktopStripEnabled = $0 }
                 ))
-                Text("A Mission Control–style strip of your desktops with custom names. Open it from the menu-bar icon → Show Desktops. Clicking to switch desktops, real thumbnails, and taking over the Mission Control keys (F3, Ctrl+Up) arrive in upcoming updates.")
+                Text("A Mission Control–style strip of your desktops with custom names. Open it from the menu-bar icon → Show Desktops, then click a desktop (or press Return) to switch to it. Real thumbnails and taking over the Mission Control keys (F3, Ctrl+Up) arrive in upcoming updates.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+            }
+            Section("Desktop switching") {
+                if !axTrusted {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Accessibility permission required")
+                                .font(.callout).bold()
+                            Text("Switching desktops sends keyboard shortcuts on your behalf, which needs Accessibility access (the same permission used for badges and minimized windows).")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("Request Accessibility Access…") {
+                                BadgeMonitor.requestAccessibilityPermission()
+                            }
+                            .buttonStyle(.link)
+                        }
+                    }
+                }
+                Toggle("Switch directly with managed ⌃1–9 shortcuts", isOn: Binding(
+                    get: { prefs.desktopStripManageHotkeys },
+                    set: { prefs.desktopStripManageHotkeys = $0 }
+                ))
+                Text("Temporarily enables the system's ⌃1–⌃9 “Switch to Desktop” shortcuts while Focus Dock runs, giving the native slide animation; your previous shortcut settings are restored on quit. When off, Focus Dock switches desktops instantly without changing any system settings (no animation).")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -44,7 +77,13 @@ struct DesktopStripSettingsTab: View {
             }
         }
         .formStyle(.grouped)
-        .onAppear { model.refresh() }
+        .onAppear {
+            model.refresh()
+            axTrusted = AXIsProcessTrusted()
+        }
+        .onReceive(axRecheck) { _ in
+            axTrusted = AXIsProcessTrusted()
+        }
     }
 }
 

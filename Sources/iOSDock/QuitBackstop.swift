@@ -24,6 +24,9 @@ enum QuitBackstop {
             if SystemDockManager.isHidden {
                 SystemDockManager.restoreSystemDock()
             }
+            // Restore the managed "Switch to Desktop N" symbolic hotkeys too
+            // (no-op when nothing is managed; skips UI off the main thread).
+            DesktopStripFeature.teardownForQuit()
         }
 
         // Catch the common termination signals. Re-raise after restoring so
@@ -33,6 +36,7 @@ enum QuitBackstop {
                 if SystemDockManager.isHidden {
                     SystemDockManager.restoreSystemDock()
                 }
+                DesktopStripFeature.teardownForQuit()
                 // Re-raise with default handler so the exit code reflects the signal.
                 signal(received, SIG_DFL)
                 raise(received)

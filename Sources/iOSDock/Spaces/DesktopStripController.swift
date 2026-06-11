@@ -89,8 +89,8 @@ final class DesktopStripPanel: NSPanel {
 /// - show: orderFrontRegardless() all panels, makeKey() the one under the
 ///   mouse — NEVER NSApp.activate (frontmost app must keep focus).
 /// - hide: Esc, key-resign (suppressed mid-rename), or any click outside.
-/// - keyboard: ←/→ move the selection ring, Return is a logged no-op until
-///   M3 switching, Esc closes (when not renaming).
+/// - keyboard: ←/→ move the selection ring, Return switches to the selected
+///   space (SpaceSwitcher via the facade), Esc closes (when not renaming).
 final class DesktopStripController: NSObject, NSWindowDelegate {
     private let model: SpacesModel
     private let uiState = DesktopStripUIState()
@@ -231,9 +231,8 @@ final class DesktopStripController: NSObject, NSWindowDelegate {
             case 124: // →
                 self.moveSelection(by: 1)
                 return nil
-            case 36, 76: // Return / keypad Enter
+            case 36, 76: // Return / keypad Enter → switch to selected tile
                 if let uuid = self.uiState.selectedUUID {
-                    // TODO(M3): real space switching via SpaceSwitcher.
                     DesktopStripFeature.requestSwitch(to: uuid)
                 }
                 return nil

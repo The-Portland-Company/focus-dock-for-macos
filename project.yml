@@ -25,7 +25,7 @@ targets:
         NSHighResolutionCapable: true
         LSUIElement: true
         NSAppleEventsUsageDescription: "Focus: Dock asks Finder how many items are in the Trash so the dock icon can show empty or full."
-        NSAccessibilityUsageDescription: "Focus: Dock uses Accessibility to read live app badges and minimized window state from the system Dock so it can display them in your custom dock."
+        NSAccessibilityUsageDescription: "Focus: Dock uses Accessibility to read live app badges and minimized window state from the system Dock so it can display them in your custom dock, and to switch between desktops when you click a desktop thumbnail."
         NSMainStoryboardFile: ""
         CFBundleIconName: AppIcon
         CFBundleIconFile: AppIcon

@@ -31,7 +31,7 @@
 	<key>LSUIElement</key>
 	<true/>
 	<key>NSAccessibilityUsageDescription</key>
-	<string>Focus: Dock uses Accessibility to read live app badges and minimized window state from the system Dock so it can display them in your custom dock.</string>
+	<string>Focus: Dock uses Accessibility to read live app badges and minimized window state from the system Dock so it can display them in your custom dock, and to switch between desktops when you click a desktop thumbnail.</string>
 	<key>NSAppleEventsUsageDescription</key>
 	<string>Focus: Dock asks Finder how many items are in the Trash so the dock icon can show empty or full.</string>
 	<key>NSHighResolutionCapable</key>

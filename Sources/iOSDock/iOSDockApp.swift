@@ -63,6 +63,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // If a previous run was force-quit while the Dock was hidden, restore
         // originals first so we don't lose them when we re-hide below.
         SystemDockManager.selfHealIfStaleHide()
+        // Same for the desktop strip's managed symbolic hotkeys: a stale
+        // snapshot means a crash skipped the restore — undo it before
+        // startIfEnabled() re-enables them cleanly below.
+        DesktopStripFeature.selfHealIfStale()
 
         // Install crash/force-quit backstop BEFORE hiding the Dock so abnormal
         // exits (SIGTERM, SIGINT, atexit) still restore the system Dock.
@@ -92,9 +96,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // bitmaps as items move in or out.
         TrashWatcher.shared.start()
 
-        // Custom desktop strip (M2: read-only overlay with inline rename;
-        // switching/thumbnails land in later milestones). No-op in App Store
-        // builds.
+        // Custom desktop strip (M3: click/Return switches real Spaces via
+        // managed Ctrl+N hotkeys with a direct-SPI fallback; real thumbnails
+        // land in M4). No-op in App Store builds.
         DesktopStripFeature.startIfEnabled()
 
         // Deep-link from folder popover → open Settings.
@@ -415,16 +419,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         if SystemDockManager.isHidden {
             SystemDockManager.restoreSystemDock()
         }
+        // Restore the managed "Switch to Desktop N" hotkeys (idempotent).
+        DesktopStripFeature.teardownForQuit()
         return .terminateNow
     }
 
     func applicationWillTerminate(_ notification: Notification) {
         // Belt-and-suspenders: if applicationShouldTerminate didn't run (e.g.
-        // logout-driven terminate), restore here too. restoreSystemDock is
+        // logout-driven terminate), restore here too. Both restores are
         // idempotent — calling twice is harmless.
         if SystemDockManager.isHidden {
             SystemDockManager.restoreSystemDock()
         }
+        DesktopStripFeature.teardownForQuit()
     }
 
     @objc func openSettings() {

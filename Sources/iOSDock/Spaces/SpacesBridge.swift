@@ -25,6 +25,9 @@ private func CGSMainConnectionID() -> UInt32
 @_silgen_name("CGSCopyManagedDisplaySpaces")
 private func CGSCopyManagedDisplaySpaces(_ cid: UInt32) -> Unmanaged<CFArray>?
 
+@_silgen_name("CGSManagedDisplaySetCurrentSpace")
+private func CGSManagedDisplaySetCurrentSpace(_ cid: UInt32, _ display: CFString, _ space: UInt64)
+
 enum SpacesBridge {
     /// Enumerates Spaces per display via SkyLight. Parsing is deliberately
     /// defensive: every cast is optional and unknown shapes are skipped, so
@@ -65,6 +68,15 @@ enum SpacesBridge {
                 spaces: spaces))
         }
         return result
+    }
+
+    /// Asks SkyLight to make `spaceID` the current space of `displayIdentifier`
+    /// (the same "Display Identifier" string fetchDisplaySpaces reports).
+    /// Used by SpaceSwitcher's fallback path — macOS 26's Dock ignores
+    /// synthetic Ctrl+arrow key events from this process, so walking spaces
+    /// with keyboard events is not reliable; this SPI switches directly.
+    static func setCurrentSpace(displayIdentifier: String, spaceID: UInt64) {
+        CGSManagedDisplaySetCurrentSpace(CGSMainConnectionID(), displayIdentifier as CFString, spaceID)
     }
 }
 #endif
