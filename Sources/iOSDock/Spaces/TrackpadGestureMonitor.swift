@@ -109,15 +109,32 @@ enum TrackpadGestureMonitor {
         let mtStart = unsafeBitCast(startPtr, to: MTStartFn.self)
         mtStop = unsafeBitCast(stopPtr, to: MTStopFn.self)
 
-        guard let list = create()?.takeRetainedValue() as? [MTDeviceRef], !list.isEmpty else {
+        // NB: a CFArray of opaque MTDevice pointers does NOT bridge to a Swift
+        // [UnsafeMutableRawPointer] via `as?` (the elements aren't CFTypes Swift
+        // can box), so read it manually with the CFArray C API — otherwise the
+        // cast silently yields nil and the monitor wrongly reports "no trackpad".
+        guard let listRef = create()?.takeRetainedValue() else {
+            log.info("TrackpadGestureMonitor: MTDeviceCreateList returned null — swipe-up inactive")
+            cleanup()
+            return false
+        }
+        let count = CFArrayGetCount(listRef)
+        guard count > 0 else {
             log.info("TrackpadGestureMonitor: no multitouch devices — swipe-up inactive (no trackpad?)")
             cleanup()
             return false
         }
-        for device in list {
+        for i in 0..<count {
+            guard let raw = CFArrayGetValueAtIndex(listRef, i) else { continue }
+            let device = UnsafeMutableRawPointer(mutating: raw)
             register(device, contactCallback)
             mtStart(device, 0)
             devices.append(device)
+        }
+        guard !devices.isEmpty else {
+            log.info("TrackpadGestureMonitor: device list had \(count) entries but none usable")
+            cleanup()
+            return false
         }
         running = true
         log.info("TrackpadGestureMonitor: observing \(devices.count) trackpad device(s) for 4-finger swipe-up")

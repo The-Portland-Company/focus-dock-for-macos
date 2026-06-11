@@ -194,14 +194,24 @@ private struct SpaceTileView: View {
             }
         }
         .frame(width: tileWidth, height: DesktopStripMetrics.labelHeight)
+        // Fires for BOTH entry paths: double-click (beginRename) and the
+        // controller's right-click / two-finger-tap routing (which just sets
+        // uiState.renamingUUID). Seeds the draft and grabs focus once the
+        // field exists.
+        .onChange(of: isRenamingThis) { renaming in
+            guard renaming else { return }
+            draft = SpaceNameStore.shared.customName(for: space.uuid) ?? ""
+            // The panel is key-but-non-activating; defer focus a tick so the
+            // field exists before FocusState takes effect.
+            DispatchQueue.main.async { renameFocused = true }
+        }
     }
 
     private func beginRename() {
-        draft = SpaceNameStore.shared.customName(for: space.uuid) ?? ""
+        guard space.isUserDesktop else { return }
+        // Draft + focus are seeded by the .onChange(of: isRenamingThis) above,
+        // so this single path also covers the controller's right-click route.
         uiState.renamingUUID = space.uuid
-        // The panel is key-but-non-activating; defer focus a tick so the
-        // field exists before FocusState takes effect.
-        DispatchQueue.main.async { renameFocused = true }
     }
 
     private func commitRename() {
@@ -216,39 +226,11 @@ private struct SpaceTileView: View {
     }
 }
 
-// MARK: - Right-click catcher
-
-/// Transparent NSView that reports right-mouse-down (two-finger tap) without
-/// swallowing left clicks. SwiftUI has no first-class right-click gesture and
-/// `.contextMenu` would show a menu rather than start inline editing, so we
-/// drop down to AppKit. Placed as a `.background` so the tile's own left-click
-/// (switch) and double-click (rename) gestures keep working on top.
-private struct RightClickCatcher: NSViewRepresentable {
-    let onRightClick: () -> Void
-
-    func makeNSView(context: Context) -> CatcherView {
-        let v = CatcherView()
-        v.onRightClick = onRightClick
-        return v
-    }
-
-    func updateNSView(_ nsView: CatcherView, context: Context) {
-        nsView.onRightClick = onRightClick
-    }
-
-    final class CatcherView: NSView {
-        var onRightClick: (() -> Void)?
-
-        // As a `.background`, this view sits BEHIND the SwiftUI tile content,
-        // so left-clicks / double-clicks hit the SwiftUI gestures first.
-        // SwiftUI tiles don't handle right-clicks, so a rightMouseDown bubbles
-        // down to this view. We accept it even while the panel is inactive.
-        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
-
-        override func rightMouseDown(with event: NSEvent) {
-            onRightClick?()
-        }
-    }
-}
+// Right-click / two-finger-tap rename is handled in DesktopStripController's
+// mouse monitors (which already observe in-panel right-clicks and own the tile
+// layout), not in SwiftUI: a `.background` NSView never receives the
+// rightMouseDown because the hit-testable thumbnail layer above it consumes it
+// first, and the strip panel is non-activating so the click usually arrives via
+// the controller's GLOBAL monitor anyway.
 
 #endif

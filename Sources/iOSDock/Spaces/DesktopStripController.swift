@@ -1,5 +1,6 @@
 import AppKit
 import SwiftUI
+import os
 
 // Entire file is compiled out of the App Store build: the strip is part of
 // the private-API desktop feature (DMG/dev only). Callers go through the
@@ -83,6 +84,20 @@ final class DesktopStripPanel: NSPanel {
     override var canBecomeMain: Bool { false }
 }
 
+// MARK: - Hosting view (right-click capture)
+
+/// Hosts the SwiftUI strip and intercepts right-mouse-down (two-finger tap).
+/// SwiftUI tiles don't handle right-clicks, so the event bubbles up the
+/// responder chain to this hosting view — a reliable capture point that, unlike
+/// a `.background` NSView, isn't shadowed by the thumbnail's hit-test layer.
+final class StripHostingView: NSHostingView<DesktopStripView> {
+    var onRightClick: ((NSPoint) -> Void)?
+
+    override func rightMouseDown(with event: NSEvent) {
+        onRightClick?(event.locationInWindow)
+    }
+}
+
 // MARK: - Controller
 
 /// Owns one DesktopStripPanel per screen and the show/hide lifecycle:
@@ -92,6 +107,7 @@ final class DesktopStripPanel: NSPanel {
 /// - keyboard: ←/→ move the selection ring, Return switches to the selected
 ///   space (SpaceSwitcher via the facade), Esc closes (when not renaming).
 final class DesktopStripController: NSObject, NSWindowDelegate {
+    static let log = Logger(subsystem: "com.theportlandcompany.FocusDock", category: "Spaces")
     private let model: SpacesModel
     private let thumbnails: SpaceThumbnailCache
     private let uiState = DesktopStripUIState()
@@ -203,13 +219,21 @@ final class DesktopStripController: NSObject, NSWindowDelegate {
         panel.delegate = self
 
         let tileWidth = DesktopStripMetrics.tileWidth(spaceCount: display.spaces.count, on: screen)
-        let host = NSHostingView(rootView: DesktopStripView(
+        let host = StripHostingView(rootView: DesktopStripView(
             model: model,
             uiState: uiState,
             thumbnails: thumbnails,
             displayIdentifier: display.displayIdentifier,
             tileWidth: tileWidth
         ))
+        // Right-click / two-finger tap bubbles up the responder chain to the
+        // hosting view (SwiftUI tiles don't claim it), so we handle rename
+        // here rather than via NSEvent monitors — a non-activating panel's
+        // in-panel clicks don't reliably surface to local/global monitors.
+        host.onRightClick = { [weak self, weak panel] pointInWindow in
+            guard let self, let panel else { return }
+            self.beginRename(inPanel: panel, atWindowX: pointInWindow.x)
+        }
         host.frame = NSRect(origin: .zero, size: frame.size)
         host.autoresizingMask = [.width, .height]
         panel.contentView = host
@@ -250,7 +274,7 @@ final class DesktopStripController: NSObject, NSWindowDelegate {
         // receive it instead of dismissing the strip.
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
-        ) { [weak self] _ in
+        ) { [weak self] event in
             guard let self else { return }
             let loc = NSEvent.mouseLocation
             if self.panels.contains(where: { $0.frame.contains(loc) }) { return }
@@ -268,6 +292,32 @@ final class DesktopStripController: NSObject, NSWindowDelegate {
             self.hide()
             return event
         }
+    }
+
+    /// Maps a right-click's window-space x within a panel to the desktop tile
+    /// beneath it and puts that tile into inline-rename mode. No-op for the
+    /// spacing gaps and for fullscreen-app tiles (no editable name).
+    private func beginRename(inPanel panel: DesktopStripPanel, atWindowX x: CGFloat) {
+        guard let screen = panel.screen,
+              let display = model.displays.first(where: { $0.displayIdentifier == panel.displayIdentifier })
+        else { return }
+        let spaces = display.spaces
+        guard !spaces.isEmpty else { return }
+
+        let tileWidth = DesktopStripMetrics.tileWidth(spaceCount: spaces.count, on: screen)
+        let stride = tileWidth + DesktopStripMetrics.tileSpacing
+        let xInContent = x - DesktopStripMetrics.horizontalPadding
+        guard xInContent >= 0 else { return }
+        let index = Int(xInContent / stride)
+        guard index >= 0, index < spaces.count else { return }
+        // Reject the gap between tiles (only the tile column itself renames).
+        guard xInContent - CGFloat(index) * stride <= tileWidth else { return }
+
+        let space = spaces[index]
+        Self.log.info("beginRename: tile index=\(index) uuid=\(space.uuid) isDesktop=\(space.isUserDesktop)")
+        guard space.isUserDesktop else { return }
+        panel.makeKey() // so the rename field can take keyboard focus
+        uiState.renamingUUID = space.uuid
     }
 
     private func removeMonitors() {
