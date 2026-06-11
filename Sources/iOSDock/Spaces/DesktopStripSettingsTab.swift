@@ -6,9 +6,10 @@ import ApplicationServices
 // so the tab never appears there.
 #if !APPSTORE
 
-/// "Desktops" settings tab — M3: master toggle, desktop-switching section
-/// (Accessibility permission row + managed-hotkeys toggle) and the rename
-/// list. The Mission-Control-interception toggle arrives with M5.
+/// "Desktops" settings tab — M4: master toggle, desktop-switching section
+/// (Accessibility permission row + managed-hotkeys toggle), a Screen
+/// Recording row for real thumbnails, and the rename list. The
+/// Mission-Control-interception toggle arrives with M5.
 struct DesktopStripSettingsTab: View {
     @EnvironmentObject var prefs: Preferences
     /// Own observable snapshot — refreshes itself on space/screen changes.
@@ -16,6 +17,11 @@ struct DesktopStripSettingsTab: View {
     /// Silent AX check (BadgeMonitor pattern): re-evaluated on appear and on
     /// a slow timer so granting permission in System Settings updates the row.
     @State private var axTrusted = AXIsProcessTrusted()
+    /// Screen Recording state for the thumbnails row (same recheck rhythm).
+    @State private var screenRecordingGranted = SpaceThumbnailCache.permissionGranted
+    /// Once a grant was attempted we offer a relaunch — macOS often only
+    /// honors a fresh Screen Recording grant after the app restarts.
+    @State private var screenRecordingRequested = false
     private let axRecheck = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -25,10 +31,41 @@ struct DesktopStripSettingsTab: View {
                     get: { prefs.desktopStripEnabled },
                     set: { prefs.desktopStripEnabled = $0 }
                 ))
-                Text("A Mission Control–style strip of your desktops with custom names. Open it from the menu-bar icon → Show Desktops, then click a desktop (or press Return) to switch to it. Real thumbnails and taking over the Mission Control keys (F3, Ctrl+Up) arrive in upcoming updates.")
+                Text("A Mission Control–style strip of your desktops with custom names and live thumbnails. Open it from the menu-bar icon → Show Desktops, then click a desktop (or press Return) to switch to it. Taking over the Mission Control keys (F3, Ctrl+Up) arrives in an upcoming update.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
+            }
+            if !screenRecordingGranted {
+                Section("Desktop thumbnails") {
+                    HStack(alignment: .top, spacing: 10) {
+                        Image(systemName: "exclamationmark.triangle.fill")
+                            .foregroundStyle(.orange)
+                        VStack(alignment: .leading, spacing: 4) {
+                            Text("Screen Recording permission required")
+                                .font(.callout).bold()
+                            Text("Real desktop thumbnails are screenshots of your desktops, which needs Screen Recording access. Without it the strip shows colored placeholder tiles instead — everything else keeps working.")
+                                .font(.caption)
+                                .foregroundStyle(.secondary)
+                                .fixedSize(horizontal: false, vertical: true)
+                            Button("Request Screen Recording Access…") {
+                                SpaceThumbnailCache.requestPermission()
+                                screenRecordingRequested = true
+                                screenRecordingGranted = SpaceThumbnailCache.permissionGranted
+                            }
+                            .buttonStyle(.link)
+                            if screenRecordingRequested {
+                                Text("After granting access in System Settings, macOS may require Focus Dock to relaunch before thumbnails appear.")
+                                    .font(.caption)
+                                    .foregroundStyle(.secondary)
+                                    .fixedSize(horizontal: false, vertical: true)
+                                Button("Relaunch Focus Dock") {
+                                    relaunchFocusDock()
+                                }
+                            }
+                        }
+                    }
+                }
             }
             Section("Desktop switching") {
                 if !axTrusted {
@@ -80,10 +117,27 @@ struct DesktopStripSettingsTab: View {
         .onAppear {
             model.refresh()
             axTrusted = AXIsProcessTrusted()
+            screenRecordingGranted = SpaceThumbnailCache.permissionGranted
         }
         .onReceive(axRecheck) { _ in
             axTrusted = AXIsProcessTrusted()
+            screenRecordingGranted = SpaceThumbnailCache.permissionGranted
         }
+    }
+}
+
+/// Relaunches through the NORMAL terminate flow (NSApp.terminate →
+/// applicationShouldTerminate → system-dock + symbolic-hotkey restore), NOT
+/// exit(): a detached shell waits out the teardown, then opens a fresh
+/// instance of this same bundle.
+private func relaunchFocusDock() {
+    let bundlePath = Bundle.main.bundlePath
+    let relauncher = Process()
+    relauncher.executableURL = URL(fileURLWithPath: "/bin/sh")
+    relauncher.arguments = ["-c", "sleep 1.0; /usr/bin/open -n \"\(bundlePath)\""]
+    try? relauncher.run()
+    DispatchQueue.main.async {
+        NSApp.terminate(nil)
     }
 }
 

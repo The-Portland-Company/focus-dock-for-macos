@@ -7,11 +7,14 @@ import AppKit
 /// The Mission-Control-style bar hosted in each DesktopStripPanel: one tile
 /// per Space of THAT panel's display, in flat SkyLight order. M3: clicking a
 /// tile switches to that Space (SpaceSwitcher via the facade); tiles are only
-/// dimmed/non-switchable when Accessibility is missing. Still gradient
-/// placeholders — real screenshots land in M4.
+/// dimmed/non-switchable when Accessibility is missing. M4: tiles show the
+/// cached real screenshot of each visited desktop, falling back to the
+/// gradient placeholder (Screen Recording denied / never visited).
 struct DesktopStripView: View {
     @ObservedObject var model: SpacesModel
     @ObservedObject var uiState: DesktopStripUIState
+    /// Tiles observe the cache themselves; held here only to pass down.
+    let thumbnails: SpaceThumbnailCache
     let displayIdentifier: String
     let tileWidth: CGFloat
 
@@ -34,7 +37,8 @@ struct DesktopStripView: View {
                     isCurrent: space.uuid == currentUUID,
                     nameVersion: nameVersion,
                     tileWidth: tileWidth,
-                    uiState: uiState
+                    uiState: uiState,
+                    thumbnails: thumbnails
                 )
             }
         }
@@ -64,6 +68,8 @@ private struct SpaceTileView: View {
     let nameVersion: Int
     let tileWidth: CGFloat
     @ObservedObject var uiState: DesktopStripUIState
+    /// Observed so the tile re-renders the moment a fresh capture lands.
+    @ObservedObject var thumbnails: SpaceThumbnailCache
 
     @State private var draft = ""
     @FocusState private var renameFocused: Bool
@@ -85,7 +91,7 @@ private struct SpaceTileView: View {
         }
     }
 
-    // MARK: Thumbnail (placeholder until M4 real screenshots)
+    // MARK: Thumbnail (real screenshot when cached, gradient placeholder otherwise)
 
     private var ringColor: Color {
         if isCurrent { return .accentColor }
@@ -97,7 +103,14 @@ private struct SpaceTileView: View {
 
     @ViewBuilder private var thumbnail: some View {
         ZStack {
-            if space.isUserDesktop {
+            if let image = thumbnails.image(for: space.uuid) {
+                // Real screenshot (M4) — aspect-fill into the 16:10 tile.
+                // Fullscreen-app spaces get one too if the user visited them
+                // while the feature ran.
+                Image(nsImage: image)
+                    .resizable()
+                    .aspectRatio(contentMode: .fill)
+            } else if space.isUserDesktop {
                 LinearGradient(colors: desktopGradient, startPoint: .topLeading, endPoint: .bottomTrailing)
             } else {
                 // Fullscreen-app space: dark tile + app-window glyph.

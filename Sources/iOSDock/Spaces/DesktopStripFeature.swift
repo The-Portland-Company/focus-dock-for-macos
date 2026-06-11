@@ -16,8 +16,13 @@ import notify
 /// (and `desktopStripManageHotkeys` is on, and Accessibility is granted) the
 /// system "Switch to Desktop N" hotkeys are snapshot-then-enabled so
 /// SpaceSwitcher can post Ctrl+N; they are restored on quit/disable and
-/// self-healed at launch after a crash. Real thumbnails and Mission Control
-/// interception arrive in M4/M5.
+/// self-healed at launch after a crash.
+///
+/// M4 scope: while the feature is enabled a SpaceThumbnailCache photographs
+/// the current desktop (space change / strip open / 60 s timer) so tiles show
+/// real screenshots; without Screen Recording permission the cache stays
+/// dormant and tiles keep their gradient placeholders. Mission Control
+/// interception arrives in M5.
 enum DesktopStripFeature {
     private static let log = Logger(subsystem: "com.theportlandcompany.FocusDock", category: "Spaces")
 
@@ -25,6 +30,7 @@ enum DesktopStripFeature {
     private static var model: SpacesModel?
     private static var logSink: AnyCancellable?
     private static var controller: DesktopStripController?
+    private static var thumbnails: SpaceThumbnailCache?
     #endif
     #if DEBUG && !APPSTORE
     private static var debugToggleInstalled = false
@@ -63,10 +69,15 @@ enum DesktopStripFeature {
         guard Preferences.shared.desktopStripEnabled, isAvailable, let model else {
             controller?.hide()
             controller = nil
+            thumbnails?.stop()
+            thumbnails = nil
             return
         }
-        if controller == nil {
-            controller = DesktopStripController(model: model)
+        if thumbnails == nil {
+            thumbnails = SpaceThumbnailCache()
+        }
+        if controller == nil, let thumbnails {
+            controller = DesktopStripController(model: model, thumbnails: thumbnails)
         }
         #endif
     }
@@ -81,6 +92,8 @@ enum DesktopStripFeature {
         if Thread.isMainThread {
             controller?.hide()
             controller = nil
+            thumbnails?.stop()
+            thumbnails = nil
         }
         SymbolicHotKeysManager.restore()
         #endif
@@ -106,10 +119,18 @@ enum DesktopStripFeature {
             log.info("toggleStrip ignored: enabled=\(Preferences.shared.desktopStripEnabled) available=\(isAvailable)")
             return
         }
-        if controller == nil {
-            controller = DesktopStripController(model: model)
+        if thumbnails == nil {
+            thumbnails = SpaceThumbnailCache()
+        }
+        if controller == nil, let thumbnails {
+            controller = DesktopStripController(model: model, thumbnails: thumbnails)
         }
         controller?.toggle()
+        if controller?.isVisible == true {
+            // M4 trigger (b): refresh the current desktop's thumbnail when
+            // the strip opens, so what the user just left is up to date.
+            thumbnails?.captureCurrentSpaces(reason: "stripOpen")
+        }
         #endif
     }
 
@@ -202,6 +223,30 @@ enum DesktopStripFeature {
             DispatchQueue.main
         ) { _ in
             SpaceSwitcher.debugWalkRight()
+        }
+        // Switch to global desktop N through the real M3/M4 path:
+        //   notifyutil -s …debug.switchToDesktop N -p …debug.switchToDesktop
+        // (the notify STATE carries the target desktop number).
+        var switchToken: Int32 = 0
+        notify_register_dispatch(
+            "com.theportlandcompany.FocusDock.debug.switchToDesktop",
+            &switchToken,
+            DispatchQueue.main
+        ) { token in
+            var state: UInt64 = 0
+            notify_get_state(token, &state)
+            let n = Int(state)
+            var number = 0
+            for display in SpacesBridge.fetchDisplaySpaces() {
+                for space in display.spaces where space.isUserDesktop {
+                    number += 1
+                    guard number == n else { continue }
+                    log.info("debug.switchToDesktop \(n) → \(space.uuid, privacy: .public)")
+                    requestSwitch(to: space.uuid)
+                    return
+                }
+            }
+            log.warning("debug.switchToDesktop \(n): no such desktop")
         }
         #endif
     }

@@ -93,6 +93,7 @@ final class DesktopStripPanel: NSPanel {
 ///   space (SpaceSwitcher via the facade), Esc closes (when not renaming).
 final class DesktopStripController: NSObject, NSWindowDelegate {
     private let model: SpacesModel
+    private let thumbnails: SpaceThumbnailCache
     private let uiState = DesktopStripUIState()
     private var panels: [DesktopStripPanel] = []
     private(set) var isVisible = false
@@ -103,8 +104,9 @@ final class DesktopStripController: NSObject, NSWindowDelegate {
     private var localClickMonitor: Any?
     private var globalClickMonitor: Any?
 
-    init(model: SpacesModel) {
+    init(model: SpacesModel, thumbnails: SpaceThumbnailCache) {
         self.model = model
+        self.thumbnails = thumbnails
         super.init()
         uiState.onRenamingChanged = { [weak self] renaming in
             self?.isRenaming = renaming
@@ -204,6 +206,7 @@ final class DesktopStripController: NSObject, NSWindowDelegate {
         let host = NSHostingView(rootView: DesktopStripView(
             model: model,
             uiState: uiState,
+            thumbnails: thumbnails,
             displayIdentifier: display.displayIdentifier,
             tileWidth: tileWidth
         ))

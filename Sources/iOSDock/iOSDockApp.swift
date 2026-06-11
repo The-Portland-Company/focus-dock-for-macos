@@ -97,8 +97,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         TrashWatcher.shared.start()
 
         // Custom desktop strip (M3: click/Return switches real Spaces via
-        // managed Ctrl+N hotkeys with a direct-SPI fallback; real thumbnails
-        // land in M4). No-op in App Store builds.
+        // managed Ctrl+N hotkeys with a direct-SPI fallback; M4: real
+        // screenshot thumbnails with a disk cache). No-op in App Store builds.
         DesktopStripFeature.startIfEnabled()
 
         // Deep-link from folder popover → open Settings.
