@@ -2,6 +2,11 @@ import Foundation
 import AppKit
 import ApplicationServices
 
+// Private SPI — compiled out of the App Store build (APPSTORE flag) so the
+// shipped binary contains no @_silgen_name private symbols. Under APPSTORE
+// the window-ID bridge returns nil and thumbnail capture is skipped.
+
+#if !APPSTORE
 // Private SPI: bridges an AX window element to its CGWindowID. Stable across
 // macOS 12–15 and used by every dock replacement on the platform. The symbol
 // lives in HIServices but isn't exported in the public headers.
@@ -19,6 +24,19 @@ private func _CGWindowListCreateImage(_ screenBounds: CGRect,
                                        _ listOption: CGWindowListOption,
                                        _ windowID: CGWindowID,
                                        _ imageOption: CGWindowImageOption) -> Unmanaged<CGImage>?
+#endif
+
+/// Resolves the CGWindowID for an AX window element via the private bridge.
+/// Returns nil in the App Store build, where the bridge is compiled out.
+private func resolveWindowID(_ element: AXUIElement) -> CGWindowID? {
+    #if APPSTORE
+    return nil
+    #else
+    var wid: CGWindowID = 0
+    guard _AXUIElementGetWindow(element, &wid) == .success, wid != 0 else { return nil }
+    return wid
+    #endif
+}
 
 /// One minimized window, surfaced into the dock as a tile in the protected
 /// right-side section. Has a UUID stable across renders so SwiftUI's ForEach
@@ -82,8 +100,7 @@ final class MinimizedMonitor: ObservableObject {
         let axApp = AXUIElementCreateApplication(window.pid)
         guard let axWindows = copyAttribute(axApp, kAXWindowsAttribute) as? [AXUIElement] else { return }
         for w in axWindows {
-            var wid: CGWindowID = 0
-            if _AXUIElementGetWindow(w, &wid) == .success, wid == window.cgWindowID {
+            if let wid = resolveWindowID(w), wid == window.cgWindowID {
                 AXUIElementSetAttributeValue(w, kAXMinimizedAttribute as CFString, kCFBooleanFalse)
                 AXUIElementPerformAction(w, kAXRaiseAction as CFString)
                 if let running = NSRunningApplication(processIdentifier: window.pid) {
@@ -129,8 +146,7 @@ final class MinimizedMonitor: ObservableObject {
             guard let axWindows = copyAttribute(axApp, kAXWindowsAttribute) as? [AXUIElement] else { continue }
 
             for w in axWindows {
-                var wid: CGWindowID = 0
-                guard _AXUIElementGetWindow(w, &wid) == .success, wid != 0 else { continue }
+                guard let wid = resolveWindowID(w) else { continue }
 
                 let isMinimized = (copyAttribute(w, kAXMinimizedAttribute) as? Bool) ?? false
                 let title = (copyAttribute(w, kAXTitleAttribute) as? String) ?? (app.localizedName ?? "")
@@ -170,12 +186,19 @@ final class MinimizedMonitor: ObservableObject {
     }
 
     private func captureWindow(id: CGWindowID) -> NSImage? {
+        #if APPSTORE
+        // Thumbnail capture relies on the private CGWindowListCreateImage
+        // bridge — skipped in the App Store build (tiles fall back to the
+        // app icon).
+        return nil
+        #else
         let opts: CGWindowImageOption = [.boundsIgnoreFraming, .nominalResolution]
         guard let cgRef = _CGWindowListCreateImage(.null, .optionIncludingWindow, id, opts) else { return nil }
         let cg = cgRef.takeRetainedValue()
         let size = NSSize(width: cg.width, height: cg.height)
         guard size.width > 1, size.height > 1 else { return nil }
         return NSImage(cgImage: cg, size: size)
+        #endif
     }
 }
 

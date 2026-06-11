@@ -9,7 +9,13 @@ import os
 // setting its CGS alpha to 0. macOS still runs its own minimize/unminimize
 // animation, but on an invisible window — so our custom fly-to-dock animation
 // is the only thing the user sees.
+//
+// Compiled out of the App Store build (APPSTORE flag): the alpha-hide trick
+// is skipped, so the system minimize animation stays visible alongside our
+// overlay — degraded but functional, and the binary contains no private
+// symbols.
 
+#if !APPSTORE
 private typealias CGSConnection = UInt32
 
 @_silgen_name("CGSMainConnectionID")
@@ -20,6 +26,7 @@ private func CGSSetWindowAlpha(_ cid: CGSConnection, _ wid: CGWindowID, _ alpha:
 
 @_silgen_name("_AXUIElementGetWindow")
 private func _AXUIElementGetWindow(_ element: AXUIElement, _ windowID: UnsafeMutablePointer<CGWindowID>) -> AXError
+#endif
 
 /// Watches every regular running app for `kAXWindowMiniaturizedNotification`
 /// and plays a custom overlay animation that flies an icon from the window's
@@ -99,17 +106,14 @@ final class MinimizeAnimator {
 
         // Cache pre-minimize state so we can fly the icon back to the same
         // spot when the user unminimizes via our dock tile.
-        var cgWindowID: CGWindowID = 0
-        if _AXUIElementGetWindow(axWindow, &cgWindowID) == .success, cgWindowID != 0 {
+        if let cgWindowID = windowID(for: axWindow) {
             if sourceFrame.width > 1 {
                 lastFrames[cgWindowID] = sourceFrame
             }
             bundlePaths[cgWindowID] = path
             // Hide the real window so the OS's own minimize animation plays on
             // an invisible target — only our custom overlay is visible.
-            let cid = CGSMainConnectionID()
-            let alphaResult = CGSSetWindowAlpha(cid, cgWindowID, 0)
-            Self.log.info("CGSSetWindowAlpha wid=\(cgWindowID) cid=\(cid) result=\(alphaResult)")
+            hideRealWindow(cgWindowID)
         }
 
         guard let target = DockTargetLocator.frame(forAppPath: path) else {
@@ -133,9 +137,8 @@ final class MinimizeAnimator {
         let target = lastFrames[wid] ?? .zero
         let source = DockTargetLocator.frameForMinimizedTile(id: window.id) ?? .zero
         let icon = window.appIcon
-        let cid = CGSMainConnectionID()
         let restoreAlpha: () -> Void = {
-            _ = CGSSetWindowAlpha(cid, wid, 1)
+            self.restoreRealWindow(wid)
             self.lastFrames.removeValue(forKey: wid)
             self.bundlePaths.removeValue(forKey: wid)
         }
@@ -149,6 +152,41 @@ final class MinimizeAnimator {
         // Swap from/to so the icon expands as it flies out (matching native
         // unminimize feel).
         MinimizeFlyOverlay.fly(icon: icon, from: source, to: target.width > 1 ? target : source.insetBy(dx: -120, dy: -120), completion: restoreAlpha)
+    }
+
+    // MARK: - Private-API shims (no-ops in the App Store build)
+
+    /// Resolves the CGWindowID backing an AX window element via private SPI.
+    /// Returns nil in the App Store build, where the bridge is compiled out —
+    /// callers then skip the alpha-hide bookkeeping entirely.
+    private func windowID(for axWindow: AXUIElement) -> CGWindowID? {
+        #if APPSTORE
+        return nil
+        #else
+        var wid: CGWindowID = 0
+        guard _AXUIElementGetWindow(axWindow, &wid) == .success, wid != 0 else { return nil }
+        return wid
+        #endif
+    }
+
+    /// Sets the real window's CGS alpha to 0 so the OS minimize animation
+    /// plays invisibly. No-op in the App Store build (system animation stays
+    /// visible; our overlay still flies).
+    private func hideRealWindow(_ wid: CGWindowID) {
+        #if !APPSTORE
+        let cid = CGSMainConnectionID()
+        let alphaResult = CGSSetWindowAlpha(cid, wid, 0)
+        Self.log.info("CGSSetWindowAlpha wid=\(wid) cid=\(cid) result=\(alphaResult)")
+        #endif
+    }
+
+    /// Restores the real window's CGS alpha to 1 after unminimize. No-op in
+    /// the App Store build (alpha was never touched).
+    private func restoreRealWindow(_ wid: CGWindowID) {
+        #if !APPSTORE
+        let cid = CGSMainConnectionID()
+        _ = CGSSetWindowAlpha(cid, wid, 1)
+        #endif
     }
 
     /// Returns the window's frame in NSWindow screen coordinates (origin

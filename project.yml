@@ -4,6 +4,10 @@ options:
   deploymentTarget:
     macOS: "13.0"
   createIntermediateGroups: true
+configs:
+  Debug: debug
+  Release: release
+  Release-AppStore: release
 targets:
   FocusDock:
     type: application
@@ -41,9 +45,39 @@ targets:
         ASSETCATALOG_COMPILER_INCLUDE_ALL_APPICON_ASSETS: YES
       configs:
         Debug:
+          # Stable dev identity so TCC (Accessibility) grants survive rebuilds.
+          # Matches the cert the live dock binary is signed with — the old
+          # self-signed "Focus Dock Developer" cert no longer exists locally.
           CODE_SIGN_STYLE: Manual
-          CODE_SIGN_IDENTITY: "Focus Dock Developer"
+          CODE_SIGN_IDENTITY: "Apple Development"
+          # Custom configs can drop Xcode's defaults — keep DEBUG explicit.
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "DEBUG"
+        # Direct-download (DMG / Developer ID) build: NOT sandboxed, full
+        # private-API feature set.
         Release:
           CODE_SIGN_STYLE: Automatic
           CODE_SIGN_IDENTITY: "-"
+          CODE_SIGN_ENTITLEMENTS: Sources/iOSDock/FocusDock-DMG.entitlements
+        # Mac App Store build: sandboxed, private APIs compiled out.
+        Release-AppStore:
+          CODE_SIGN_STYLE: Automatic
+          CODE_SIGN_IDENTITY: "-"
           CODE_SIGN_ENTITLEMENTS: Sources/iOSDock/FocusDock.entitlements
+          SWIFT_ACTIVE_COMPILATION_CONDITIONS: "APPSTORE"
+schemes:
+  FocusDock:
+    build:
+      targets:
+        FocusDock: all
+    run:
+      config: Debug
+    archive:
+      config: Release
+  FocusDock-AppStore:
+    build:
+      targets:
+        FocusDock: all
+    run:
+      config: Release-AppStore
+    archive:
+      config: Release-AppStore
