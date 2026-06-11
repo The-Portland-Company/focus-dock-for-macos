@@ -51,6 +51,7 @@ final class Preferences: ObservableObject {
     private let kDesktopStripEnabled = "desktopStripEnabled"
     private let kDesktopStripInterceptMC = "desktopStripInterceptMissionControl"
     private let kDesktopStripManageHotkeys = "desktopStripManageHotkeys"
+    private let kDesktopStripOnboarded = "desktopStripOnboarded"
 
     /// Resolve a UserDefaults key for the active profile (or leave global keys
     /// untouched). Per-profile keys are listed in `ProfileKeys.perProfile`.
@@ -188,6 +189,12 @@ final class Preferences: ObservableObject {
             _tick &+= 1
             NotificationCenter.default.post(name: Self.changed, object: nil)
         }
+    }
+    /// True once the first-enable onboarding sheet has been shown (M5).
+    /// Global, not per-profile; no `changed` post needed (UI reads it directly).
+    var desktopStripOnboarded: Bool {
+        get { defaults.bool(forKey: kDesktopStripOnboarded) }
+        set { defaults.set(newValue, forKey: kDesktopStripOnboarded) }
     }
 
     // MARK: - Defaults & reset

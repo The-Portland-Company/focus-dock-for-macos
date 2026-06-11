@@ -216,4 +216,39 @@ private struct SpaceTileView: View {
     }
 }
 
+// MARK: - Right-click catcher
+
+/// Transparent NSView that reports right-mouse-down (two-finger tap) without
+/// swallowing left clicks. SwiftUI has no first-class right-click gesture and
+/// `.contextMenu` would show a menu rather than start inline editing, so we
+/// drop down to AppKit. Placed as a `.background` so the tile's own left-click
+/// (switch) and double-click (rename) gestures keep working on top.
+private struct RightClickCatcher: NSViewRepresentable {
+    let onRightClick: () -> Void
+
+    func makeNSView(context: Context) -> CatcherView {
+        let v = CatcherView()
+        v.onRightClick = onRightClick
+        return v
+    }
+
+    func updateNSView(_ nsView: CatcherView, context: Context) {
+        nsView.onRightClick = onRightClick
+    }
+
+    final class CatcherView: NSView {
+        var onRightClick: (() -> Void)?
+
+        // As a `.background`, this view sits BEHIND the SwiftUI tile content,
+        // so left-clicks / double-clicks hit the SwiftUI gestures first.
+        // SwiftUI tiles don't handle right-clicks, so a rightMouseDown bubbles
+        // down to this view. We accept it even while the panel is inactive.
+        override func acceptsFirstMouse(for event: NSEvent?) -> Bool { true }
+
+        override func rightMouseDown(with event: NSEvent) {
+            onRightClick?()
+        }
+    }
+}
+
 #endif

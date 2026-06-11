@@ -243,11 +243,18 @@ final class DesktopStripController: NSObject, NSWindowDelegate {
                 return event
             }
         }
-        // Click outside (other apps) → hide.
+        // Click outside (other apps) → hide. A right-click inside a
+        // non-activating panel can be delivered GLOBALLY (the app isn't
+        // active), so skip the hide when the click location falls within one
+        // of our panels — that lets the in-panel right-click rename catcher
+        // receive it instead of dismissing the strip.
         globalClickMonitor = NSEvent.addGlobalMonitorForEvents(
             matching: [.leftMouseDown, .rightMouseDown]
         ) { [weak self] _ in
-            self?.hide()
+            guard let self else { return }
+            let loc = NSEvent.mouseLocation
+            if self.panels.contains(where: { $0.frame.contains(loc) }) { return }
+            self.hide()
         }
         // Click on one of OUR other windows (dock panel, settings) → hide too;
         // clicks inside a strip panel pass through untouched.

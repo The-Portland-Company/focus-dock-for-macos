@@ -71,6 +71,7 @@ enum DesktopStripFeature {
             controller = nil
             thumbnails?.stop()
             thumbnails = nil
+            reconcileInterception()
             return
         }
         if thumbnails == nil {
@@ -79,6 +80,7 @@ enum DesktopStripFeature {
         if controller == nil, let thumbnails {
             controller = DesktopStripController(model: model, thumbnails: thumbnails)
         }
+        reconcileInterception()
         #endif
     }
 
@@ -94,8 +96,11 @@ enum DesktopStripFeature {
             controller = nil
             thumbnails?.stop()
             thumbnails = nil
+            MissionControlInterceptor.stop()
+            TrackpadGestureMonitor.stop()
         }
         SymbolicHotKeysManager.restore()
+        TrackpadGesturePrefs.restore()
         #endif
     }
 
@@ -106,6 +111,19 @@ enum DesktopStripFeature {
     static func selfHealIfStale() {
         #if !APPSTORE
         SymbolicHotKeysManager.selfHealIfStale()
+        TrackpadGesturePrefs.selfHealIfStale()
+        #endif
+    }
+
+    /// Invoked by the MultitouchSupport detector (and the DEBUG simulate hook)
+    /// when a 3-or-4-finger upward swipe is recognized. Opens the strip if it
+    /// is closed; a swipe while the strip is already open is ignored (the
+    /// strip's own Esc / outside-click dismisses it).
+    static func handleSwipeUp() {
+        #if !APPSTORE
+        guard Preferences.shared.desktopStripEnabled, isAvailable else { return }
+        if controller?.isVisible == true { return }
+        toggleStrip()
         #endif
     }
 
@@ -182,6 +200,32 @@ enum DesktopStripFeature {
         }
     }
 
+    /// Installs/removes the Mission-Control interceptor, the four-finger
+    /// swipe-up detector, and the system swipe-up pref override to match the
+    /// current preferences + AX trust. DISABLED-SAFE: the tap is only ever
+    /// installed when the feature is on, intercept is on, AND AX is trusted —
+    /// otherwise everything is torn down so the system behaves normally.
+    private static func reconcileInterception() {
+        let wantIntercept = Preferences.shared.desktopStripEnabled
+            && Preferences.shared.desktopStripInterceptMissionControl
+            && isAvailable
+            && AXIsProcessTrusted()
+        if wantIntercept {
+            MissionControlInterceptor.start()
+            TrackpadGestureMonitor.start()
+            // Suppress the system four-finger swipe-up so only OUR strip opens
+            // (best-effort; the WindowServer may still flash MC until the
+            // driver re-reads the pref — documented).
+            TrackpadGesturePrefs.disableSystemSwipeUp()
+        } else {
+            MissionControlInterceptor.stop()
+            TrackpadGestureMonitor.stop()
+            if TrackpadGesturePrefs.hasSnapshot {
+                TrackpadGesturePrefs.restore()
+            }
+        }
+    }
+
     private static func startModelIfNeeded() {
         guard model == nil else { return }
         let model = SpacesModel()
@@ -197,6 +241,7 @@ enum DesktopStripFeature {
         logSink = model.$displays.sink { displays in
             logSnapshot(displays)
             reconcileHotkeys()
+            reconcileInterception()
         }
         log.info("desktop strip: AXIsProcessTrusted=\(SpaceSwitcher.canSwitch)")
     }
@@ -215,6 +260,14 @@ enum DesktopStripFeature {
             DispatchQueue.main
         ) { _ in
             DesktopStripFeature.toggleStrip()
+        }
+        var swipeToken: Int32 = 0
+        notify_register_dispatch(
+            "com.theportlandcompany.FocusDock.debug.simulateSwipeUp",
+            &swipeToken,
+            DispatchQueue.main
+        ) { _ in
+            DesktopStripFeature.handleSwipeUp()
         }
         var walkToken: Int32 = 0
         notify_register_dispatch(

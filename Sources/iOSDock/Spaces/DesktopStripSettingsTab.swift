@@ -22,6 +22,8 @@ struct DesktopStripSettingsTab: View {
     /// Once a grant was attempted we offer a relaunch — macOS often only
     /// honors a fresh Screen Recording grant after the app restarts.
     @State private var screenRecordingRequested = false
+    /// Drives the first-enable onboarding sheet.
+    @State private var showOnboarding = false
     private let axRecheck = Timer.publish(every: 2.0, on: .main, in: .common).autoconnect()
 
     var body: some View {
@@ -29,9 +31,24 @@ struct DesktopStripSettingsTab: View {
             Section("Desktop Strip") {
                 Toggle("Show custom desktop strip", isOn: Binding(
                     get: { prefs.desktopStripEnabled },
-                    set: { prefs.desktopStripEnabled = $0 }
+                    set: { newValue in
+                        prefs.desktopStripEnabled = newValue
+                        // First time the user ENABLES the feature → onboarding.
+                        if newValue && !prefs.desktopStripOnboarded {
+                            showOnboarding = true
+                        }
+                    }
                 ))
-                Text("A Mission Control–style strip of your desktops with custom names and live thumbnails. Open it from the menu-bar icon → Show Desktops, then click a desktop (or press Return) to switch to it. Taking over the Mission Control keys (F3, Ctrl+Up) arrives in an upcoming update.")
+                Text("A Mission Control–style strip of your desktops with custom names and live thumbnails. Open it from the menu-bar icon → Show Desktops, with ⌃↑ / F3, or a four-finger swipe up, then click a desktop (or press Return) to switch to it.")
+                    .font(.caption)
+                    .foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                Toggle("Open the desktop strip instead of Mission Control", isOn: Binding(
+                    get: { prefs.desktopStripInterceptMissionControl },
+                    set: { prefs.desktopStripInterceptMissionControl = $0 }
+                ))
+                .disabled(!prefs.desktopStripEnabled)
+                Text("Opens Focus Dock's desktop strip instead of Mission Control on ⌃↑, F3, and four-finger swipe up. The system's “swipe up for Mission Control” gesture is temporarily turned off while this is on, and restored when you quit. Requires Accessibility access; without it, the system Mission Control keeps working.")
                     .font(.caption)
                     .foregroundStyle(.secondary)
                     .fixedSize(horizontal: false, vertical: true)
@@ -122,6 +139,116 @@ struct DesktopStripSettingsTab: View {
         .onReceive(axRecheck) { _ in
             axTrusted = AXIsProcessTrusted()
             screenRecordingGranted = SpaceThumbnailCache.permissionGranted
+        }
+        .sheet(isPresented: $showOnboarding) {
+            DesktopStripOnboardingSheet {
+                prefs.desktopStripOnboarded = true
+                showOnboarding = false
+                axTrusted = AXIsProcessTrusted()
+                screenRecordingGranted = SpaceThumbnailCache.permissionGranted
+            }
+        }
+    }
+}
+
+// MARK: - Onboarding sheet
+
+/// Lightweight 3-step first-enable sheet: Accessibility (switch desktops +
+/// intercept Mission Control), optional Screen Recording (live thumbnails),
+/// and a consent notice that Focus Dock temporarily adjusts the ⌃1–9 shortcuts
+/// and the Mission Control gesture — all restored on quit. Shown once, the
+/// first time the feature is enabled (`desktopStripOnboarded`).
+private struct DesktopStripOnboardingSheet: View {
+    let onDone: () -> Void
+    @State private var axTrusted = AXIsProcessTrusted()
+    @State private var screenRecordingGranted = SpaceThumbnailCache.permissionGranted
+    private let recheck = Timer.publish(every: 1.5, on: .main, in: .common).autoconnect()
+
+    var body: some View {
+        VStack(alignment: .leading, spacing: 18) {
+            HStack(spacing: 12) {
+                Image(systemName: "rectangle.3.group.fill")
+                    .font(.system(size: 30))
+                    .foregroundStyle(Color.accentColor)
+                VStack(alignment: .leading, spacing: 2) {
+                    Text("Set up the desktop strip").font(.title2).bold()
+                    Text("Three quick things and you're done.")
+                        .font(.callout).foregroundStyle(.secondary)
+                }
+            }
+
+            step(
+                number: 1,
+                done: axTrusted,
+                title: "Allow Accessibility",
+                why: "Lets Focus Dock switch desktops on your behalf and open its strip instead of Mission Control on ⌃↑ and F3."
+            ) {
+                if !axTrusted {
+                    Button("Grant Accessibility Access…") {
+                        BadgeMonitor.requestAccessibilityPermission()
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+
+            step(
+                number: 2,
+                done: screenRecordingGranted,
+                title: "Allow Screen Recording (optional)",
+                why: "Shows real, live thumbnails of each desktop. Skip it and the strip uses colored placeholder tiles instead — everything else still works."
+            ) {
+                if !screenRecordingGranted {
+                    Button("Grant Screen Recording Access…") {
+                        SpaceThumbnailCache.requestPermission()
+                    }
+                    .buttonStyle(.link)
+                }
+            }
+
+            step(
+                number: 3,
+                done: true,
+                title: "A heads-up on system settings",
+                why: "While Focus Dock runs it temporarily turns on the ⌃1–⌃9 “Switch to Desktop” shortcuts and turns off the system four-finger “swipe up for Mission Control” gesture. Both are snapshotted and restored exactly when you quit."
+            ) { EmptyView() }
+
+            HStack {
+                Spacer()
+                Button("Done", action: onDone)
+                    .keyboardShortcut(.defaultAction)
+            }
+        }
+        .padding(24)
+        .frame(width: 460)
+        .onReceive(recheck) { _ in
+            axTrusted = AXIsProcessTrusted()
+            screenRecordingGranted = SpaceThumbnailCache.permissionGranted
+        }
+    }
+
+    @ViewBuilder
+    private func step<Action: View>(
+        number: Int, done: Bool, title: String, why: String,
+        @ViewBuilder action: () -> Action
+    ) -> some View {
+        HStack(alignment: .top, spacing: 12) {
+            ZStack {
+                Circle()
+                    .fill(done ? Color.green : Color.accentColor.opacity(0.85))
+                    .frame(width: 26, height: 26)
+                if done {
+                    Image(systemName: "checkmark").font(.caption.bold()).foregroundStyle(.white)
+                } else {
+                    Text("\(number)").font(.caption.bold()).foregroundStyle(.white)
+                }
+            }
+            VStack(alignment: .leading, spacing: 4) {
+                Text(title).font(.callout).bold()
+                Text(why).font(.caption).foregroundStyle(.secondary)
+                    .fixedSize(horizontal: false, vertical: true)
+                action()
+            }
+            Spacer(minLength: 0)
         }
     }
 }
