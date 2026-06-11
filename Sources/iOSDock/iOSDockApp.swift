@@ -92,6 +92,10 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // bitmaps as items move in or out.
         TrashWatcher.shared.start()
 
+        // Custom desktop strip (M1: log-only spaces enumeration; UI and
+        // switching land in later milestones). No-op in App Store builds.
+        DesktopStripFeature.startIfEnabled()
+
         // Deep-link from folder popover → open Settings.
         NotificationCenter.default.addObserver(
             forName: SettingsRouter.openFolder, object: nil, queue: .main
