@@ -2,7 +2,7 @@ import SwiftUI
 import AppKit
 import UniformTypeIdentifiers
 
-enum SettingsTab: String { case about, general, apps, profiles }
+enum SettingsTab: String { case about, general, apps, profiles, desktops }
 
 struct SettingsView: View {
     @EnvironmentObject var library: AppLibrary
@@ -35,6 +35,16 @@ struct SettingsView: View {
                 ProfilesTab()
                     .tabItem { Label("Profiles", systemImage: "person.2.circle") }
                     .tag(SettingsTab.profiles)
+                // Desktop strip (DMG/dev builds only): the tab view itself is
+                // compiled out under APPSTORE and isAvailable is false there,
+                // so the tab never appears in the App Store build.
+                #if !APPSTORE
+                if DesktopStripFeature.isAvailable {
+                    DesktopStripSettingsTab()
+                        .tabItem { Label("Desktops", systemImage: "rectangle.3.group") }
+                        .tag(SettingsTab.desktops)
+                }
+                #endif
             }
             .padding()
         }

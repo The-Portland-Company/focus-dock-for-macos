@@ -46,6 +46,11 @@ final class Preferences: ObservableObject {
     private let kFillWidth = "fillWidth"
     private let kPaddingUniform = "paddingUniform"
     private let kDockScale = "dockScale"
+    // Desktop strip (Mission-Control replacement) — global like kDockIcon /
+    // kMenuBar, never per-profile: desktops belong to the machine.
+    private let kDesktopStripEnabled = "desktopStripEnabled"
+    private let kDesktopStripInterceptMC = "desktopStripInterceptMissionControl"
+    private let kDesktopStripManageHotkeys = "desktopStripManageHotkeys"
 
     /// Resolve a UserDefaults key for the active profile (or leave global keys
     /// untouched). Per-profile keys are listed in `ProfileKeys.perProfile`.
@@ -94,6 +99,9 @@ final class Preferences: ObservableObject {
         if defaults.object(forKey: pk(kFillWidth)) == nil { defaults.set(true, forKey: pk(kFillWidth)) }
         if defaults.object(forKey: pk(kPaddingUniform)) == nil { defaults.set(false, forKey: pk(kPaddingUniform)) }
         if defaults.object(forKey: pk(kDockScale)) == nil { defaults.set(1.0, forKey: pk(kDockScale)) }
+        if defaults.object(forKey: kDesktopStripEnabled) == nil { defaults.set(false, forKey: kDesktopStripEnabled) }
+        if defaults.object(forKey: kDesktopStripInterceptMC) == nil { defaults.set(true, forKey: kDesktopStripInterceptMC) }
+        if defaults.object(forKey: kDesktopStripManageHotkeys) == nil { defaults.set(true, forKey: kDesktopStripManageHotkeys) }
         // Reset transient edit-layout flag every launch (always global).
         defaults.set(false, forKey: kEditing)
         defaults.set(false, forKey: kEditingDocks)
@@ -145,6 +153,38 @@ final class Preferences: ObservableObject {
         get { defaults.bool(forKey: kMenuBar) }
         set {
             defaults.set(newValue, forKey: kMenuBar)
+            _tick &+= 1
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+        }
+    }
+
+    // MARK: - Desktop strip (global, not per-profile)
+
+    /// Master switch for the custom desktop strip (DMG/dev builds only —
+    /// DesktopStripFeature.isAvailable is false under APPSTORE regardless).
+    var desktopStripEnabled: Bool {
+        get { defaults.bool(forKey: kDesktopStripEnabled) }
+        set {
+            defaults.set(newValue, forKey: kDesktopStripEnabled)
+            _tick &+= 1
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+        }
+    }
+    /// Swallow F3 / Ctrl+Up and open our strip instead (used from M5).
+    var desktopStripInterceptMissionControl: Bool {
+        get { defaults.bool(forKey: kDesktopStripInterceptMC) }
+        set {
+            defaults.set(newValue, forKey: kDesktopStripInterceptMC)
+            _tick &+= 1
+            NotificationCenter.default.post(name: Self.changed, object: nil)
+        }
+    }
+    /// Allow enabling the "Switch to Desktop N" symbolic hotkeys for direct
+    /// switching (used from M3; off → arrow-walk fallback).
+    var desktopStripManageHotkeys: Bool {
+        get { defaults.bool(forKey: kDesktopStripManageHotkeys) }
+        set {
+            defaults.set(newValue, forKey: kDesktopStripManageHotkeys)
             _tick &+= 1
             NotificationCenter.default.post(name: Self.changed, object: nil)
         }

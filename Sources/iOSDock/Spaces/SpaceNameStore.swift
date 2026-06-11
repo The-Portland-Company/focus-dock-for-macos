@@ -6,6 +6,9 @@ import Foundation
 /// names belong to the machine, not to a dock profile.
 final class SpaceNameStore {
     static let shared = SpaceNameStore()
+    /// Posted after any rename so live UI (strip tiles, settings rows) can
+    /// re-resolve names.
+    static let changed = Notification.Name("FocusDock.SpaceNamesChanged")
 
     private let defaults: UserDefaults
     private let key = "spaceNames"
@@ -31,6 +34,13 @@ final class SpaceNameStore {
         return "Desktop \(defaultNumber)"
     }
 
+    /// The stored custom name only — nil when the space uses its default
+    /// "Desktop N". Lets edit fields show an empty value + placeholder.
+    func customName(for uuid: String) -> String? {
+        guard let stored = names[uuid], !stored.isEmpty else { return nil }
+        return stored
+    }
+
     /// Stores a trimmed custom name. Setting an empty/whitespace-only name
     /// deletes the entry so the space falls back to its default "Desktop N".
     func setName(_ name: String, for uuid: String) {
@@ -42,6 +52,7 @@ final class SpaceNameStore {
             dict[uuid] = trimmed
         }
         names = dict
+        NotificationCenter.default.post(name: Self.changed, object: nil)
     }
 
     /// Drops entries for uuids no longer present — but only once the dict

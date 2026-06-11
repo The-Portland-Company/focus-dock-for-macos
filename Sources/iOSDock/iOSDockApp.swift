@@ -92,8 +92,9 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
         // bitmaps as items move in or out.
         TrashWatcher.shared.start()
 
-        // Custom desktop strip (M1: log-only spaces enumeration; UI and
-        // switching land in later milestones). No-op in App Store builds.
+        // Custom desktop strip (M2: read-only overlay with inline rename;
+        // switching/thumbnails land in later milestones). No-op in App Store
+        // builds.
         DesktopStripFeature.startIfEnabled()
 
         // Deep-link from folder popover → open Settings.
@@ -107,6 +108,8 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
             self?.applyPresentationMode()
             self?.installStatusItemIfNeeded()
             self?.updateEditModeOverlay()
+            // Live-create/destroy the desktop strip when its preference flips.
+            DesktopStripFeature.applySettings()
         }
 
         profilesObserver = NotificationCenter.default.addObserver(
@@ -205,11 +208,19 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
     private func buildStatusMenu() -> NSMenu {
         let menu = NSMenu()
 
+        if DesktopStripFeature.isAvailable {
+            menu.addItem(withTitle: "Show Desktops", action: #selector(showDesktops), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+        }
         menu.addItem(withTitle: "Settings…", action: #selector(openSettings), keyEquivalent: ",").target = self
         menu.addItem(.separator())
         menu.addItem(withTitle: "Quit Focus: Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
 
         return menu
+    }
+
+    @objc func showDesktops() {
+        DesktopStripFeature.toggleStrip()
     }
 
     private func rebuildStatusItemMenu() {
@@ -236,6 +247,12 @@ final class AppDelegate: NSObject, NSApplicationDelegate {
 
     private func buildMinimalQuitMenu() -> NSMenu {
         let menu = NSMenu()
+        // The right-click menu is the one users actually see — surface the
+        // strip toggle here too (only when the feature can work in this build).
+        if DesktopStripFeature.isAvailable {
+            menu.addItem(withTitle: "Show Desktops", action: #selector(showDesktops), keyEquivalent: "").target = self
+            menu.addItem(.separator())
+        }
         menu.addItem(withTitle: "Quit Focus: Dock", action: #selector(NSApplication.terminate(_:)), keyEquivalent: "q")
         return menu
     }
