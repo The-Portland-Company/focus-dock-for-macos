@@ -1,0 +1,515 @@
+/* @the-portland-company/ui — TPC theme for the shadcn/ui fork (Tailwind v4).
+
+   Layering:
+     1. --tpc-* brand tokens (from @the-portland-company/ui-tokens brand.css,
+        inlined below as defaults so this file works standalone).
+     2. shadcn semantic variables (--background, --primary, ...) mapped onto
+        --tpc-* for light, .dark / [data-theme=dark], and system dark via
+        prefers-color-scheme (unless the user forced .light).
+     3. Tailwind v4 @theme inline bridge so bg-primary, text-muted-foreground,
+        duration-fast, ease-emphasized, ... resolve to tokens.
+     4. Motion rules: token durations/easing as Tailwind defaults, global
+        reduced-motion, 44px minimum hit area for compact controls,
+        focus-visible ring.
+
+   Consumers override individual --tpc-* vars after importing this file.
+   Never add a parallel color namespace. */
+@import "tailwindcss";
+@import "tw-animate-css";
+
+@custom-variant dark (&:where(.dark, .dark *, [data-theme="dark"], [data-theme="dark"] *));
+
+/* ---------- 1. brand tokens (defaults; ui-tokens brand.css wins if loaded later) ---------- */
+:root {
+  --tpc-bg: #ffffff;
+  --tpc-panel: #f6f7f9;
+  --tpc-ink: #0f172a;
+  --tpc-muted: #475569;
+  --tpc-line: #8a96a3;
+  --tpc-primary: #047857;
+  --tpc-primary-ink: #ffffff;
+  --tpc-accent-1: #7c3aed;
+  --tpc-accent-2: #0e7490;
+  --tpc-accent-3: #92610a;
+  --tpc-accent-4: #1d4ed8;
+  --tpc-danger: #b91c1c;
+  --tpc-danger-ink: #ffffff;
+
+  --tpc-duration-fast: 120ms;
+  --tpc-duration-base: 200ms;
+  --tpc-duration-slow: 360ms;
+  --tpc-duration-slower: 600ms;
+  --tpc-ease-standard: cubic-bezier(0.2, 0, 0, 1);
+  --tpc-ease-emphasized: cubic-bezier(0.16, 1, 0.3, 1);
+  --tpc-ease-exit: cubic-bezier(0.4, 0, 1, 1);
+  --tpc-ease-linear: linear;
+
+  --radius: 0.625rem;
+
+  --color-1: oklch(66.2% 0.225 25.9);
+
+  --color-2: oklch(60.4% 0.26 302);
+
+  --color-3: oklch(69.6% 0.165 251);
+
+  --color-4: oklch(80.2% 0.134 225);
+
+  --color-5: oklch(90.7% 0.231 133);
+}
+
+.dark,
+:root[data-theme="dark"] {
+  --tpc-bg: #040406;
+  --tpc-panel: #0b0b0f;
+  --tpc-ink: #ffffff;
+  --tpc-muted: #94a3b8;
+  --tpc-line: #334155;
+  --tpc-primary: #10b981;
+  --tpc-primary-ink: #042f1e;
+  --tpc-accent-1: #a78bfa;
+  --tpc-accent-2: #22d3ee;
+  --tpc-accent-3: #fbbf24;
+  --tpc-accent-4: #60a5fa;
+  --tpc-danger: #f87171;
+  --tpc-danger-ink: #1f0606;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not([data-theme="light"]) {
+    --tpc-bg: #040406;
+    --tpc-panel: #0b0b0f;
+    --tpc-ink: #ffffff;
+    --tpc-muted: #94a3b8;
+    --tpc-line: #334155;
+    --tpc-primary: #10b981;
+    --tpc-primary-ink: #042f1e;
+    --tpc-accent-1: #a78bfa;
+    --tpc-accent-2: #22d3ee;
+    --tpc-accent-3: #fbbf24;
+    --tpc-accent-4: #60a5fa;
+    --tpc-danger: #f87171;
+    --tpc-danger-ink: #1f0606;
+  }
+}
+
+/* ---------- 2. shadcn semantic variables -> TPC tokens ---------- */
+:root {
+  --background: var(--tpc-bg);
+  --foreground: var(--tpc-ink);
+  --card: var(--tpc-bg);
+  --card-foreground: var(--tpc-ink);
+  --popover: var(--tpc-bg);
+  --popover-foreground: var(--tpc-ink);
+  --primary: var(--tpc-primary);
+  --primary-foreground: var(--tpc-primary-ink);
+  --secondary: var(--tpc-panel);
+  --secondary-foreground: var(--tpc-ink);
+  --muted: var(--tpc-panel);
+  --muted-foreground: var(--tpc-muted);
+  --accent: color-mix(in oklab, var(--tpc-primary) 10%, var(--tpc-bg));
+  --accent-foreground: var(--tpc-ink);
+  --destructive: var(--tpc-danger);
+  --destructive-foreground: var(--tpc-danger-ink);
+  --scrim: rgb(0 0 0 / 0.5);
+  --border: color-mix(in oklab, var(--tpc-line) 45%, var(--tpc-bg));
+  --input: var(--tpc-line);
+  --ring: var(--tpc-primary);
+  --chart-1: var(--tpc-primary);
+  --chart-2: var(--tpc-accent-1);
+  --chart-3: var(--tpc-accent-2);
+  --chart-4: var(--tpc-accent-3);
+  --chart-5: var(--tpc-accent-4);
+  --sidebar: var(--tpc-panel);
+  --sidebar-foreground: var(--tpc-ink);
+  --sidebar-primary: var(--tpc-primary);
+  --sidebar-primary-foreground: var(--tpc-primary-ink);
+  --sidebar-accent: color-mix(in oklab, var(--tpc-primary) 12%, var(--tpc-panel));
+  --sidebar-accent-foreground: var(--tpc-ink);
+  --sidebar-border: color-mix(in oklab, var(--tpc-line) 45%, var(--tpc-panel));
+  --sidebar-ring: var(--tpc-primary);
+  color-scheme: light;
+}
+
+.dark,
+:root[data-theme="dark"] {
+  --accent: color-mix(in oklab, var(--tpc-primary) 16%, var(--tpc-bg));
+  --card: var(--tpc-panel);
+  --popover: var(--tpc-panel);
+  --border: color-mix(in oklab, var(--tpc-line) 80%, var(--tpc-bg));
+  color-scheme: dark;
+}
+
+@media (prefers-color-scheme: dark) {
+  :root:not(.light):not([data-theme="light"]) {
+    --accent: color-mix(in oklab, var(--tpc-primary) 16%, var(--tpc-bg));
+    --card: var(--tpc-panel);
+    --popover: var(--tpc-panel);
+    --border: color-mix(in oklab, var(--tpc-line) 80%, var(--tpc-bg));
+    color-scheme: dark;
+  }
+}
+
+/* ---------- 3. Tailwind v4 bridge ---------- */
+@theme inline {
+  --color-background: var(--background);
+  --color-foreground: var(--foreground);
+  --color-card: var(--card);
+  --color-card-foreground: var(--card-foreground);
+  --color-popover: var(--popover);
+  --color-popover-foreground: var(--popover-foreground);
+  --color-primary: var(--primary);
+  --color-primary-foreground: var(--primary-foreground);
+  --color-secondary: var(--secondary);
+  --color-secondary-foreground: var(--secondary-foreground);
+  --color-muted: var(--muted);
+  --color-muted-foreground: var(--muted-foreground);
+  --color-accent: var(--accent);
+  --color-accent-foreground: var(--accent-foreground);
+  --color-destructive: var(--destructive);
+  --color-destructive-foreground: var(--destructive-foreground);
+  --color-scrim: var(--scrim);
+  --color-border: var(--border);
+  --color-input: var(--input);
+  --color-ring: var(--ring);
+  --color-chart-1: var(--chart-1);
+  --color-chart-2: var(--chart-2);
+  --color-chart-3: var(--chart-3);
+  --color-chart-4: var(--chart-4);
+  --color-chart-5: var(--chart-5);
+  --color-sidebar: var(--sidebar);
+  --color-sidebar-foreground: var(--sidebar-foreground);
+  --color-sidebar-primary: var(--sidebar-primary);
+  --color-sidebar-primary-foreground: var(--sidebar-primary-foreground);
+  --color-sidebar-accent: var(--sidebar-accent);
+  --color-sidebar-accent-foreground: var(--sidebar-accent-foreground);
+  --color-sidebar-border: var(--sidebar-border);
+  --color-sidebar-ring: var(--sidebar-ring);
+
+  /* Back-compat TPC utility names (bg-bg, bg-panel, text-ink, border-line, ...). */
+  --color-bg: var(--tpc-bg);
+  --color-panel: var(--tpc-panel);
+  --color-ink: var(--tpc-ink);
+  --color-ink-dim: var(--tpc-muted);
+  --color-line: var(--tpc-line);
+  --color-danger: var(--tpc-danger);
+  --color-danger-ink: var(--tpc-danger-ink);
+  --color-tpc-green: var(--tpc-primary);
+  --color-tpc-accent-1: var(--tpc-accent-1);
+  --color-tpc-accent-2: var(--tpc-accent-2);
+  --color-tpc-accent-3: var(--tpc-accent-3);
+  --color-tpc-accent-4: var(--tpc-accent-4);
+
+  --radius-sm: calc(var(--radius) - 4px);
+  --radius-md: calc(var(--radius) - 2px);
+  --radius-lg: var(--radius);
+  --radius-xl: calc(var(--radius) + 4px);
+
+  /* Motion tokens as utilities: duration-fast/base/slow/slower,
+     ease-standard/emphasized/exit/linear-tpc. */
+  --duration-fast: var(--tpc-duration-fast);
+  --duration-base: var(--tpc-duration-base);
+  --duration-slow: var(--tpc-duration-slow);
+  --duration-slower: var(--tpc-duration-slower);
+  --ease-standard: var(--tpc-ease-standard);
+  --ease-emphasized: var(--tpc-ease-emphasized);
+  --ease-exit: var(--tpc-ease-exit);
+  --ease-linear-tpc: var(--tpc-ease-linear);
+
+  /* Any bare `transition-*` utility picks up token timing by default. */
+  --default-transition-duration: var(--tpc-duration-fast);
+  --default-transition-timing-function: var(--tpc-ease-standard);
+  --animate-shimmer-slide: shimmer-slide var(--speed) ease-in-out infinite alternate;
+  --animate-spin-around: spin-around calc(var(--speed) * 2) infinite linear;
+  @keyframes shimmer-slide {
+  to {
+    transform: translate(calc(100cqw - 100%), 0);
+    }
+  }
+  @keyframes spin-around {
+  0% {
+    transform: translateZ(0) rotate(0);
+    }
+  15%, 35% {
+    transform: translateZ(0) rotate(90deg);
+    }
+  65%, 85% {
+    transform: translateZ(0) rotate(270deg);
+    }
+  100% {
+    transform: translateZ(0) rotate(360deg);
+    }
+  }
+  --animate-marquee: marquee var(--duration) infinite linear;
+  --animate-marquee-vertical: marquee-vertical var(--duration) linear infinite
+;
+  @keyframes marquee {
+  from {
+    transform: translateX(0);
+    }
+  to {
+    transform: translateX(calc(-100% - var(--gap)));
+    }
+  }
+  @keyframes marquee-vertical {
+  from {
+    transform: translateY(0);
+    }
+  to {
+    transform: translateY(calc(-100% - var(--gap)));
+    }
+  }
+  --animate-gradient: gradient 8s linear infinite;
+  @keyframes gradient {
+  to {
+    background-position: var(--bg-size, 300%) 0;
+    }
+  }
+  --animate-aurora: aurora 8s ease-in-out infinite alternate;
+  @keyframes aurora {
+  0% {
+    background-position: 0% 50%;
+    transform: rotate(-5deg) scale(0.9);
+    }
+  25% {
+    background-position: 50% 100%;
+    transform: rotate(5deg) scale(1.1);
+    }
+  50% {
+    background-position: 100% 50%;
+    transform: rotate(-3deg) scale(0.95);
+    }
+  75% {
+    background-position: 50% 0%;
+    transform: rotate(3deg) scale(1.05);
+    }
+  100% {
+    background-position: 0% 50%;
+    transform: rotate(-5deg) scale(0.9);
+    }
+  }
+  --animate-blink-cursor: blink-cursor 1.2s step-end infinite;
+  @keyframes blink-cursor {
+  0%, 49% {
+    opacity: 1;
+    }
+  50%, 100% {
+    opacity: 0;
+    }
+  }
+  --animate-shiny-text: shiny-text 8s infinite;
+  @keyframes shiny-text {
+  0%, 90%, 100% {
+    background-position: calc(-100% - var(--shiny-width)) 0;
+    }
+  30%, 60% {
+    background-position: calc(100% + var(--shiny-width)) 0;
+    }
+  }
+  --animate-shine: shine var(--duration) infinite linear;
+  @keyframes shine {
+  0% {
+    background-position: 0% 0%;
+    }
+  50% {
+    background-position: 100% 100%;
+    }
+  to {
+    background-position: 0% 0%;
+    }
+  }
+  --animate-meteor: meteor 5s linear infinite;
+  @keyframes meteor {
+  0% {
+    transform: rotate(var(--angle)) translateX(0);
+    opacity: 1;
+    }
+  70% {
+    opacity: 1;
+    }
+  100% {
+    transform: rotate(var(--angle)) translateX(-500px);
+    opacity: 0;
+    }
+  }
+  --animate-ripple: ripple var(--duration,2s) ease calc(var(--i, 0)*.2s) infinite;
+  @keyframes ripple {
+  0%, 100% {
+    transform: translate(-50%, -50%) scale(1);
+    }
+  50% {
+    transform: translate(-50%, -50%) scale(0.9);
+    }
+  }
+  --animate-rippling: rippling var(--duration) ease-out;
+  @keyframes rippling {
+  0% {
+    opacity: 1;
+    }
+  100% {
+    transform: scale(2);
+    opacity: 0;
+    }
+  }
+  --animate-pulse: pulse var(--duration) ease-out infinite;
+  --animate-pulse-ripple: pulse-ripple var(--duration) cubic-bezier(0.16, 1, 0.3, 1) infinite;
+  @keyframes pulse {
+  0%, 100% {
+    boxShadow: 0 0 0 0 var(--pulse-color, oklch(from var(--bg) l c h / 0.5));
+    }
+  50% {
+    boxShadow: 0 0 0 var(--distance) var(--pulse-color, oklch(from var(--bg) l c h / 0.5));
+    }
+  }
+  @keyframes pulse-ripple {
+  0% {
+    boxShadow: 0 0 0 0 oklch(from var(--pulse-color, var(--bg)) l c h / 1);
+    }
+  100% {
+    boxShadow: 0 0 0 var(--distance) oklch(from var(--pulse-color, var(--bg)) l c h / 0);
+    }
+  }
+  --animate-rainbow: rainbow var(--speed, 2s) infinite linear;
+  --color-color-5: var(--color-5);
+  --color-color-4: var(--color-4);
+  --color-color-3: var(--color-3);
+  --color-color-2: var(--color-2);
+  --color-color-1: var(--color-1);
+  @keyframes rainbow {
+  0% {
+    background-position: 0%;
+    }
+  100% {
+    background-position: 200%;
+    }
+  }
+  --animate-orbit: orbit calc(var(--duration)*1s) linear infinite;
+  @keyframes orbit {
+  0% {
+    transform: rotate(calc(var(--angle) * 1deg)) translateY(calc(var(--radius) * 1px)) rotate(calc(var(--angle) * -1deg));
+    }
+  100% {
+    transform: rotate(calc(var(--angle) * 1deg + 360deg)) translateY(calc(var(--radius) * 1px)) rotate(calc((var(--angle) * -1deg) - 360deg));
+    }
+  }
+  --animate-line-shadow: line-shadow 15s linear infinite;
+  @keyframes line-shadow {
+  0% {
+    background-position: 0 0;
+    }
+  100% {
+    background-position: 100% -100%;
+    }
+  }
+  --animate-background-position-spin: background-position-spin 3000ms infinite alternate;
+  @keyframes background-position-spin {
+  0% {
+    background-position: top center;
+    }
+  100% {
+    background-position: bottom center;
+    }
+  }}
+
+/* ---------- 4. base + motion rules ---------- */
+@layer base {
+  * {
+    @apply border-border outline-ring/50;
+  }
+  body {
+    @apply bg-background text-foreground;
+  }
+
+  /* Visible keyboard focus everywhere, never on mouse click. */
+  :where(a, button, [role="button"], input, select, textarea, summary, [tabindex]):focus-visible {
+    outline: 2px solid var(--ring);
+    outline-offset: 2px;
+  }
+
+  /* >=44px hit area for compact controls without changing their visual size. */
+  :where(
+      [data-slot="checkbox"],
+      [data-slot="radio-group-item"],
+      [data-slot="switch"],
+      [data-slot="slider-thumb"],
+      [data-slot="toggle"],
+      [data-slot="button"][data-size="xs"],
+      [data-slot="button"][data-size="sm"],
+      [data-slot="button"][data-size="icon-xs"],
+      [data-slot="button"][data-size="icon-sm"],
+      [data-slot="button"][data-size="icon"],
+      [data-slot="button"][data-size="default"],
+      [data-slot="tabs-trigger"],
+      [data-slot="pagination-link"],
+      [data-slot="dialog-close"],
+      [data-slot="sheet-close"]
+    ) {
+    position: relative;
+  }
+  :where(
+      [data-slot="checkbox"],
+      [data-slot="radio-group-item"],
+      [data-slot="switch"],
+      [data-slot="slider-thumb"],
+      [data-slot="toggle"],
+      [data-slot="button"][data-size="xs"],
+      [data-slot="button"][data-size="sm"],
+      [data-slot="button"][data-size="icon-xs"],
+      [data-slot="button"][data-size="icon-sm"],
+      [data-slot="button"][data-size="icon"],
+      [data-slot="button"][data-size="default"],
+      [data-slot="tabs-trigger"],
+      [data-slot="pagination-link"]
+    )::before {
+    content: "";
+    position: absolute;
+    top: 50%;
+    left: 50%;
+    width: max(100%, 44px);
+    height: max(100%, 44px);
+    transform: translate(-50%, -50%);
+  }
+}
+
+@media (prefers-reduced-motion: reduce) {
+  *,
+  *::before,
+  *::after {
+    animation-duration: 0.01ms !important;
+    animation-iteration-count: 1 !important;
+    transition-duration: 0.01ms !important;
+    scroll-behavior: auto !important;
+  }
+}
+
+.dark {
+  --color-1: oklch(66.2% 0.225 25.9);
+  --color-2: oklch(60.4% 0.26 302);
+  --color-3: oklch(69.6% 0.165 251);
+  --color-4: oklch(80.2% 0.134 225);
+  --color-5: oklch(90.7% 0.231 133);
+}
+  ::view-transition-old(root), ::view-transition-new(root) {
+    animation: none;
+    mix-blend-mode: normal;
+}
+@keyframes tpc-shimmer {
+  to {
+    transform: translateX(100%);
+  }
+}
+
+::view-transition-old(root),
+::view-transition-new(root) {
+  animation-duration: var(--tpc-duration-slow);
+  animation-timing-function: var(--tpc-ease-emphasized);
+}
+
+/* Page-level reduced-motion override (gallery toggle, user setting). */
+:root[data-motion="reduce"] *,
+:root[data-motion="reduce"] *::before,
+:root[data-motion="reduce"] *::after {
+  animation-duration: 0.01ms !important;
+  animation-iteration-count: 1 !important;
+  transition-duration: 0.01ms !important;
+  scroll-behavior: auto !important;
+}

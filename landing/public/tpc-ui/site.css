@@ -1,0 +1,18 @@
+/* Focus Dock landing on TPC UI. Compiled by tools/tpc-ui-sync.mjs (Tailwind v4 CLI) into tpc-ui.css.
+   Layers: TPC theme (tokens + shadcn bridge + @theme) -> ui-tokens brand.css -> TPC motion keyframes.
+   Chakra components read these tokens through src/theme.ts semantic tokens; colors are tokens only. */
+@import "./vendor/theme.css";
+@import "./vendor/brand.css";
+@import "./vendor/animations.css";
+
+@utility duration-fast { transition-duration: var(--tpc-duration-fast); }
+@utility duration-base { transition-duration: var(--tpc-duration-base); }
+
+@source "./consent-entry.js";
+@source "../../tools/tpc-ui-sync.mjs";
+@source "../../src";
+
+/* Unlayered: Chakra's unlayered button reset would otherwise beat the banner's layered utilities. */
+#tpc-consent button[data-act] { min-height: 2.75rem; padding: 0 1rem; border-radius: calc(var(--radius) - 2px); border: 1px solid var(--border); background: var(--background); color: var(--foreground); font-size: .875rem; font-weight: 500; }
+#tpc-consent button[data-act]:hover { background: var(--accent); color: var(--accent-foreground); }
+#tpc-consent button[data-act="accept"] { background: var(--primary); color: var(--primary-foreground); border-color: var(--primary); }

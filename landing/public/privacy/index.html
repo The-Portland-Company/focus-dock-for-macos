@@ -1,0 +1,99 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script data-theme-prepaint>(function(){try{
+var KEY="tpc_theme";
+var LEGACY_KEY="politogy_theme";
+var VALID=["light","dark","system"];
+function fromCookie(){try{
+  var m=document.cookie.match(/(?:^|;\s*)tpc_theme=([^;]+)/);
+  if(m)return decodeURIComponent(m[1]);
+  var lm=document.cookie.match(/(?:^|;\s*)politogy_theme=([^;]+)/);
+  return lm?decodeURIComponent(lm[1]):null;
+}catch(e){return null;}}
+var cookie=fromCookie();
+var ls=null;try{ls=localStorage.getItem(KEY)||localStorage.getItem(LEGACY_KEY);}catch(e){}
+var pref=cookie||ls||"system";
+if(VALID.indexOf(pref)===-1)pref="system";
+if(cookie&&cookie!==ls){try{localStorage.setItem(KEY,cookie);}catch(e){}}
+var resolved=pref;
+if(pref==="system"){try{resolved=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}catch(e){resolved="light";}}
+var d=document.documentElement;
+if(resolved==="dark"){d.classList.add("dark");}else{d.classList.remove("dark");}
+try{d.style.colorScheme=resolved;}catch(e){}
+}catch(e){}})();
+(function(){try{
+var KEY="tpc_theme";
+function fromCookie(){try{
+  var m=document.cookie.match(/(?:^|;\s*)tpc_theme=([^;]+)/);
+  if(m)return decodeURIComponent(m[1]);
+  var lm=document.cookie.match(/(?:^|;\s*)politogy_theme=([^;]+)/);
+  return lm?decodeURIComponent(lm[1]):null;
+}catch(e){return null;}}
+var mql=window.matchMedia("(prefers-color-scheme: dark)");
+function onChange(e){
+  var cookie=fromCookie();
+  var ls=null;try{ls=localStorage.getItem(KEY);}catch(err){}
+  var pref=cookie||ls||"system";
+  if(pref!=="system")return;
+  var d=document.documentElement;
+  if(e.matches){d.classList.add("dark");}else{d.classList.remove("dark");}
+  try{d.style.colorScheme=e.matches?"dark":"light";}catch(err){}
+}
+if(mql.addEventListener){mql.addEventListener("change",onChange);}else if(mql.addListener){mql.addListener(onChange);}
+function want(){var cookie=fromCookie();var ls=null;try{ls=localStorage.getItem(KEY);}catch(err){}var pref=cookie||ls||"system";return pref==="dark"||(pref!=="light"&&mql.matches);}
+var d=document.documentElement;
+new MutationObserver(function(){var w=want();if(w!==d.classList.contains("dark")){if(w){d.classList.add("dark");}else{d.classList.remove("dark");}try{d.style.colorScheme=w?"dark":"light";}catch(err){}}}).observe(d,{attributes:true,attributeFilter:["class"]});
+}catch(e){}})();</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Privacy Policy | Focus Dock</title>
+<meta name="description" content="Privacy Policy for Focus Dock by The Portland Company.">
+<link rel="canonical" href="https://focus-dock.pages.dev/privacy/">
+<meta name="tpc-policy-versions" content="{&quot;terms&quot;:1,&quot;privacy&quot;:1,&quot;cookies&quot;:1}">
+<link rel="stylesheet" href="/tpc-ui/tpc-ui.css">
+<script src="/tpc-ui/consent.js" defer></script>
+<script src="/tpc-ui/theme-toggle.js" defer></script>
+</head>
+<body class="min-h-screen bg-background text-foreground antialiased">
+<header class="border-b">
+  <div class="mx-auto flex max-w-3xl items-center justify-between gap-4 px-6 py-3">
+    <a class="inline-flex min-h-11 items-center font-semibold" href="/">Focus Dock</a>
+    <button type="button" data-tpc-theme-toggle class="inline-flex min-h-11 cursor-pointer items-center rounded-md border px-3 text-sm hover:bg-accent"><span data-tpc-theme-label>Theme</span></button>
+  </div>
+</header>
+<main class="mx-auto max-w-3xl px-6 py-16" data-legal="privacy" data-version="1">
+<h1 class="mb-6 text-4xl font-bold tracking-tight">Privacy Policy</h1>
+<p class="my-4 text-muted-foreground"><em>Last updated: May 24, 2026</em></p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Overview</h2>
+<p class="my-4 text-muted-foreground">The Portland Company (&quot;TPC,&quot; &quot;we,&quot; &quot;us&quot;) operates theportlandcompany.com as a marketing website for our software development agency. This policy explains what limited information we collect when you visit the site, how we use it, and the choices you have. We have written it in plain English on purpose. If anything here is unclear, email us and we will explain.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">What we collect</h2>
+<p class="my-4 text-muted-foreground">This site is a marketing site, not an application. We do not have user accounts, we do not run a login system, and we do not collect personal data from casual browsing beyond standard server logs that our hosting provider (Cloudflare) maintains for security and abuse-prevention purposes.</p>
+<p class="my-4 text-muted-foreground">The only personal information we actively collect is what you choose to send us. If you email us, fill out a contact form, or otherwise reach out to start a conversation, we receive whatever you put in that message — typically your name, email address, company, and a description of your project. We treat that information as confidential and use it only to respond to you and to evaluate a potential engagement.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">How we use it</h2>
+<p class="my-4 text-muted-foreground">We use contact information solely to reply to your inquiry, understand your project, and decide together whether we are a good fit to work on it. We do not sell, rent, or trade your information. We do not add visitors to marketing lists without explicit consent. If a conversation does not lead to an engagement, we keep the correspondence in our email and project records, but we do not recontact you for marketing purposes.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Cookies and analytics</h2>
+<p class="my-4 text-muted-foreground">At present, this site does not use third-party advertising cookies or cross-site tracking pixels. Our hosting platform may set essential cookies required for the site to function, for security, and for protection against abuse. We may, in the future, add a privacy-respecting analytics tool (for example, a self-hosted or cookieless analytics product) to understand aggregate traffic patterns. If we do, we will update this page and limit collection to anonymous, aggregated data — not personal identifiers.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Third-party services</h2>
+<p class="my-4 text-muted-foreground">The site is hosted on Cloudflare, which receives standard request metadata (IP address, user agent, timestamps) when you load a page. That data is governed by Cloudflare's own privacy practices. Outbound links from this site may point to third-party platforms (LinkedIn, GitHub, X, Crunchbase, and similar). Once you click through, you are subject to those platforms' privacy policies, not ours. We do not currently embed third-party tracking scripts, social pixels, or advertising tags on this site.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Your rights</h2>
+<p class="my-4 text-muted-foreground">Depending on where you live, you may have the right to request a copy of the personal information we hold about you, to ask us to correct or delete it, or to object to certain uses. Because we collect very little — essentially just the contents of messages you send us — these requests are typically easy to honor. Email us using the address in the Contact section below and we will respond within a reasonable timeframe.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Children's privacy</h2>
+<p class="my-4 text-muted-foreground">This site is intended for businesses and adult professionals evaluating software development services. It is not directed to children under 13, and we do not knowingly collect personal information from them. If you believe a child has sent us information, contact us and we will delete it.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Changes to this policy</h2>
+<p class="my-4 text-muted-foreground">We may update this policy as the site evolves — for example, if we add a contact form, introduce analytics, or change hosting providers. When we make material changes, we will update the &quot;Last updated&quot; date at the top of this page. Continued use of the site after an update means you accept the revised policy.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Contact</h2>
+<p class="my-4 text-muted-foreground">Questions about privacy? Email Spencer at agency@theportlandcompany.com. We read every message.</p>
+</main>
+<footer class="border-t">
+  <div class="mx-auto max-w-3xl px-6 py-6">
+  <nav class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted-foreground" aria-label="Legal">
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/terms">Terms</a>
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/privacy">Privacy Policy</a>
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/cookies">Cookie Policy</a>
+    <button type="button" class="inline-flex min-h-11 cursor-pointer items-center hover:text-foreground" data-tpc-cookie-settings>Cookie settings</button>
+  </nav>
+  </div>
+</footer>
+</body>
+</html>

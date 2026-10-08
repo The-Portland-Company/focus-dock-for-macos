@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script data-theme-prepaint>(function(){try{
+var KEY="tpc_theme";
+var LEGACY_KEY="politogy_theme";
+var VALID=["light","dark","system"];
+function fromCookie(){try{
+  var m=document.cookie.match(/(?:^|;\s*)tpc_theme=([^;]+)/);
+  if(m)return decodeURIComponent(m[1]);
+  var lm=document.cookie.match(/(?:^|;\s*)politogy_theme=([^;]+)/);
+  return lm?decodeURIComponent(lm[1]):null;
+}catch(e){return null;}}
+var cookie=fromCookie();
+var ls=null;try{ls=localStorage.getItem(KEY)||localStorage.getItem(LEGACY_KEY);}catch(e){}
+var pref=cookie||ls||"system";
+if(VALID.indexOf(pref)===-1)pref="system";
+if(cookie&&cookie!==ls){try{localStorage.setItem(KEY,cookie);}catch(e){}}
+var resolved=pref;
+if(pref==="system"){try{resolved=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}catch(e){resolved="light";}}
+var d=document.documentElement;
+if(resolved==="dark"){d.classList.add("dark");}else{d.classList.remove("dark");}
+try{d.style.colorScheme=resolved;}catch(e){}
+}catch(e){}})();
+(function(){try{
+var KEY="tpc_theme";
+function fromCookie(){try{
+  var m=document.cookie.match(/(?:^|;\s*)tpc_theme=([^;]+)/);
+  if(m)return decodeURIComponent(m[1]);
+  var lm=document.cookie.match(/(?:^|;\s*)politogy_theme=([^;]+)/);
+  return lm?decodeURIComponent(lm[1]):null;
+}catch(e){return null;}}
+var mql=window.matchMedia("(prefers-color-scheme: dark)");
+function onChange(e){
+  var cookie=fromCookie();
+  var ls=null;try{ls=localStorage.getItem(KEY);}catch(err){}
+  var pref=cookie||ls||"system";
+  if(pref!=="system")return;
+  var d=document.documentElement;
+  if(e.matches){d.classList.add("dark");}else{d.classList.remove("dark");}
+  try{d.style.colorScheme=e.matches?"dark":"light";}catch(err){}
+}
+if(mql.addEventListener){mql.addEventListener("change",onChange);}else if(mql.addListener){mql.addListener(onChange);}
+function want(){var cookie=fromCookie();var ls=null;try{ls=localStorage.getItem(KEY);}catch(err){}var pref=cookie||ls||"system";return pref==="dark"||(pref!=="light"&&mql.matches);}
+var d=document.documentElement;
+new MutationObserver(function(){var w=want();if(w!==d.classList.contains("dark")){if(w){d.classList.add("dark");}else{d.classList.remove("dark");}try{d.style.colorScheme=w?"dark":"light";}catch(err){}}}).observe(d,{attributes:true,attributeFilter:["class"]});
+}catch(e){}})();</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Cookie Policy | Focus Dock</title>
+<meta name="description" content="Cookie Policy for Focus Dock by The Portland Company.">
+<link rel="canonical" href="https://focus-dock.pages.dev/cookies/">
+<meta name="tpc-policy-versions" content="{&quot;terms&quot;:1,&quot;privacy&quot;:1,&quot;cookies&quot;:1}">
+<link rel="stylesheet" href="/tpc-ui/tpc-ui.css">
+<script src="/tpc-ui/consent.js" defer></script>
+<script src="/tpc-ui/theme-toggle.js" defer></script>
+</head>
+<body class="min-h-screen bg-background text-foreground antialiased">
+<header class="border-b">
+  <div class="mx-auto flex max-w-3xl items-center justify-between gap-4 px-6 py-3">
+    <a class="inline-flex min-h-11 items-center font-semibold" href="/">Focus Dock</a>
+    <button type="button" data-tpc-theme-toggle class="inline-flex min-h-11 cursor-pointer items-center rounded-md border px-3 text-sm hover:bg-accent"><span data-tpc-theme-label>Theme</span></button>
+  </div>
+</header>
+<main class="mx-auto max-w-3xl px-6 py-16" data-legal="cookies" data-version="1">
+<h1 class="mb-6 text-4xl font-bold tracking-tight">Cookie Policy</h1>
+<p class="my-4 text-muted-foreground"><em>Last updated: October 7, 2026</em></p>
+<p class="my-4 text-muted-foreground">We use a small number of cookies:</p>
+<ul class="my-4 list-disc space-y-2 pl-6"><li><strong>Essential</strong> — required for the site to function (e.g. remembering your cookie choice, your theme preference, and basic security protections). These cannot be turned off.</li><li><strong>Analytics</strong> — privacy-respecting usage analytics (Umami), used only if you opt in (or haven't opted out, outside the EU/EEA/UK/CH).</li><li><strong>Marketing</strong> — ad platform pixels (X, Google, Apple), used only if you opt in, and always off if your browser sends a Global Privacy Control (GPC) signal.</li></ul>
+<p class="my-4 text-muted-foreground">You can change your choice at any time using &quot;Cookie settings&quot; in the site footer. See our <a class="text-primary underline underline-offset-4" href="/privacy">Privacy Policy</a> for how any information collected is used.</p>
+</main>
+<footer class="border-t">
+  <div class="mx-auto max-w-3xl px-6 py-6">
+  <nav class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted-foreground" aria-label="Legal">
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/terms">Terms</a>
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/privacy">Privacy Policy</a>
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/cookies">Cookie Policy</a>
+    <button type="button" class="inline-flex min-h-11 cursor-pointer items-center hover:text-foreground" data-tpc-cookie-settings>Cookie settings</button>
+  </nav>
+  </div>
+</footer>
+</body>
+</html>
