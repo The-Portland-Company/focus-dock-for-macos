@@ -20,7 +20,6 @@ import {
   VStack,
   useClipboard,
   useColorMode,
-  useColorModeValue,
   useDisclosure,
   Icon,
   Link,
@@ -33,6 +32,7 @@ import {
   FiDownload,
   FiHeart,
   FiMoon,
+  FiMonitor,
   FiSun,
   FiFolder,
   FiZap,
@@ -50,13 +50,25 @@ import {
 } from "react-icons/si";
 import { FaEthereum, FaLinkedin } from "react-icons/fa";
 import type { IconType } from "react-icons";
+import { useState } from "react";
+
+type TpcTheme = { get: () => string; next: () => string; set: (p: string) => void; resolve: (p: string) => string };
+const tpcTheme = () => (window as unknown as { tpcTheme?: TpcTheme }).tpcTheme;
 
 const APP_VERSION = "0.3.2";
 const DMG_URL = `/FocusDock-${APP_VERSION}.dmg`;
 
 function Nav({ onDonate }: { onDonate: () => void }) {
-  const { colorMode, toggleColorMode } = useColorMode();
-  const bg = useColorModeValue("whiteAlpha.800", "blackAlpha.600");
+  const { setColorMode } = useColorMode();
+  const [pref, setPref] = useState<string>(() => tpcTheme()?.get() ?? "system");
+  const cycle = () => {
+    const t = tpcTheme();
+    if (!t) return;
+    const next = t.next();
+    t.set(next);
+    setColorMode(t.resolve(next));
+    setPref(next);
+  };
   return (
     <Box
       as="nav"
@@ -64,9 +76,9 @@ function Nav({ onDonate }: { onDonate: () => void }) {
       top={0}
       zIndex={10}
       backdropFilter="saturate(180%) blur(20px)"
-      bg={bg}
+      bg="bg"
       borderBottomWidth="1px"
-      borderColor={useColorModeValue("blackAlpha.100", "whiteAlpha.100")}
+      borderColor="border"
     >
       <Container maxW="6xl" py={3}>
         <Flex align="center" justify="space-between">
@@ -74,12 +86,12 @@ function Nav({ onDonate }: { onDonate: () => void }) {
             <Box
               boxSize="28px"
               borderRadius="8px"
-              bgGradient="linear(135deg, #5b8def, #9b59ff)"
+              bgGradient="linear(135deg, accent-4, accent-1)"
             />
             <Text fontWeight={700} fontSize="lg" letterSpacing="-0.01em">
               Focus Dock
             </Text>
-            <Tag size="sm" colorScheme="purple" variant="subtle" ml={1}>
+            <Tag size="sm" variant="subtle" ml={1} display={{ base: "none", sm: "inline-flex" }}>
               v{APP_VERSION}
             </Tag>
           </HStack>
@@ -89,6 +101,7 @@ function Nav({ onDonate }: { onDonate: () => void }) {
               variant="ghost"
               leftIcon={<FiHeart />}
               onClick={onDonate}
+              display={{ base: "none", sm: "inline-flex" }}
             >
               Donate
             </Button>
@@ -96,17 +109,18 @@ function Nav({ onDonate }: { onDonate: () => void }) {
               as="a"
               href={DMG_URL}
               size="sm"
-              colorScheme="purple"
+              variant="tpc"
               leftIcon={<FiDownload />}
             >
               Download
             </Button>
             <IconButton
-              aria-label="Toggle color mode"
+              aria-label={`Theme: ${pref}. Switch theme`}
+              title={`Theme: ${pref}`}
               size="sm"
               variant="ghost"
-              onClick={toggleColorMode}
-              icon={colorMode === "dark" ? <FiSun /> : <FiMoon />}
+              onClick={cycle}
+              icon={pref === "system" ? <FiMonitor /> : pref === "dark" ? <FiMoon /> : <FiSun />}
             />
           </HStack>
         </Flex>
@@ -116,8 +130,8 @@ function Nav({ onDonate }: { onDonate: () => void }) {
 }
 
 function Hero() {
-  const subtle = useColorModeValue("gray.600", "gray.400");
-  const tagBg = useColorModeValue("blackAlpha.50", "whiteAlpha.100");
+  const subtle = "muted-fg";
+  const tagBg = "muted";
   return (
     <Container maxW="6xl" pt={{ base: 16, md: 24 }} pb={{ base: 12, md: 16 }}>
       <VStack spacing={8} textAlign="center">
@@ -135,7 +149,7 @@ function Hero() {
           The dock the Mac deserves.{" "}
           <Box
             as="span"
-            bgGradient="linear(135deg, #5b8def, #9b59ff)"
+            bgGradient="linear(135deg, accent-4, accent-1)"
             bgClip="text"
           >
             iOS-style folders, magnification, and parity.
@@ -147,12 +161,12 @@ function Hero() {
           Mac. Plus crisp magnification, customizable everything, and a
           running-app view that finally matches macOS.
         </Text>
-        <HStack spacing={3} pt={2}>
+        <Stack direction={{ base: "column", sm: "row" }} spacing={3} pt={2} w={{ base: "full", sm: "auto" }}>
           <Button
             as="a"
             href={DMG_URL}
             size="lg"
-            colorScheme="purple"
+            variant="tpc"
             leftIcon={<FiDownload />}
             px={8}
           >
@@ -169,7 +183,7 @@ function Hero() {
           >
             View source
           </Button>
-        </HStack>
+        </Stack>
         <Text fontSize="sm" color={subtle}>
           Open the DMG · drag <strong>Focus Dock</strong> into{" "}
           <strong>Applications</strong> · launch.
@@ -184,11 +198,8 @@ function Hero() {
 }
 
 function ScreenshotFrame({ src, alt }: { src: string; alt: string }) {
-  const ring = useColorModeValue("blackAlpha.200", "whiteAlpha.200");
-  const shadow = useColorModeValue(
-    "0 30px 80px -20px rgba(0,0,0,0.25)",
-    "0 30px 80px -10px rgba(0,0,0,0.6)",
-  );
+  const ring = "border";
+  const shadow = "2xl";
   return (
     <Box
       borderRadius="2xl"
@@ -236,11 +247,11 @@ const features = [
 ];
 
 function Features() {
-  const cardBg = useColorModeValue("white", "whiteAlpha.50");
-  const cardBorder = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
-  const iconBg = useColorModeValue("purple.50", "purple.900");
-  const iconColor = useColorModeValue("purple.600", "purple.200");
-  const subtle = useColorModeValue("gray.600", "gray.400");
+  const cardBg = "card";
+  const cardBorder = "border";
+  const iconBg = "muted";
+  const iconColor = "primary";
+  const subtle = "muted-fg";
   return (
     <Container maxW="6xl" py={{ base: 16, md: 24 }}>
       <VStack spacing={4} textAlign="center" mb={12}>
@@ -284,9 +295,9 @@ function Features() {
 }
 
 function Team() {
-  const cardBg = useColorModeValue("white", "whiteAlpha.50");
-  const cardBorder = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
-  const subtle = useColorModeValue("gray.600", "gray.400");
+  const cardBg = "card";
+  const cardBorder = "border";
+  const subtle = "muted-fg";
   return (
     <Container maxW="4xl" py={{ base: 16, md: 24 }}>
       <VStack spacing={3} textAlign="center" mb={10}>
@@ -354,9 +365,9 @@ function Team() {
 }
 
 function Download() {
-  const cardBg = useColorModeValue("white", "whiteAlpha.50");
-  const cardBorder = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
-  const subtle = useColorModeValue("gray.600", "gray.400");
+  const cardBg = "card";
+  const cardBorder = "border";
+  const subtle = "muted-fg";
   return (
     <Container maxW="4xl" py={{ base: 16, md: 24 }}>
       <Box
@@ -379,9 +390,13 @@ function Download() {
             as="a"
             href={DMG_URL}
             size="lg"
-            colorScheme="purple"
+            variant="tpc"
             leftIcon={<FiDownload />}
-            px={10}
+            px={{ base: 6, md: 10 }}
+            whiteSpace="normal"
+            h="auto"
+            minH={12}
+            py={3}
           >
             Download Focus Dock {APP_VERSION}
           </Button>
@@ -395,8 +410,8 @@ function Download() {
 }
 
 function Footer({ onDonate }: { onDonate: () => void }) {
-  const subtle = useColorModeValue("gray.600", "gray.400");
-  const border = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
+  const subtle = "muted-fg";
+  const border = "border";
   return (
     <Box borderTopWidth="1px" borderColor={border} py={10}>
       <Container maxW="6xl">
@@ -426,6 +441,23 @@ function Footer({ onDonate }: { onDonate: () => void }) {
             </Link>
           </HStack>
         </Flex>
+        <Flex
+          as="nav"
+          aria-label="Legal"
+          wrap="wrap"
+          justify={{ base: "center", md: "flex-start" }}
+          columnGap={6}
+          mt={6}
+          fontSize="sm"
+          color={subtle}
+        >
+          <Link href="/terms/" minH="44px" display="inline-flex" alignItems="center">Terms</Link>
+          <Link href="/privacy/" minH="44px" display="inline-flex" alignItems="center">Privacy Policy</Link>
+          <Link href="/cookies/" minH="44px" display="inline-flex" alignItems="center">Cookie Policy</Link>
+          <Link as="button" data-tpc-cookie-settings="" minH="44px" display="inline-flex" alignItems="center">
+            Cookie settings
+          </Link>
+        </Flex>
       </Container>
     </Box>
   );
@@ -435,7 +467,6 @@ type PaymentMethod = {
   name: string;
   value: string;
   icon: IconType;
-  bg: string;
   iconColor?: string;
   preferred?: boolean;
   href?: string;
@@ -446,49 +477,43 @@ const PAYMENT_METHODS: PaymentMethod[] = [
     name: "Cash",
     value: "Contact us to arrange payment",
     icon: FiDollarSign,
-    bg: "#10b981",
     preferred: true,
   },
   {
     name: "PayPal",
     value: "thespencerhill@gmail.com",
     icon: SiPaypal,
-    bg: "#003087",
     href: "https://paypal.me/thespencerhill",
   },
   {
     name: "Venmo",
     value: "@spencerdennishill",
     icon: SiVenmo,
-    bg: "#3D95CE",
     href: "https://venmo.com/spencerdennishill",
   },
   {
     name: "Cash App",
     value: "$spencerdennishill",
     icon: SiCashapp,
-    bg: "#00D632",
     href: "https://cash.app/$spencerdennishill",
   },
   {
     name: "Zelle",
     value: "503-610-8759",
     icon: SiZelle,
-    bg: "#6D1ED4",
   },
   {
     name: "MetaMask",
     value: "0xc882b4019011d6e34170485F54B3853Cbbd92f8A",
     icon: FaEthereum,
-    bg: "#F6851B",
   },
 ];
 
 function PaymentRow({ method }: { method: PaymentMethod }) {
   const { hasCopied, onCopy } = useClipboard(method.value);
-  const rowBg = useColorModeValue("blackAlpha.50", "whiteAlpha.50");
-  const rowBorder = useColorModeValue("blackAlpha.100", "whiteAlpha.100");
-  const subtle = useColorModeValue("gray.600", "gray.400");
+  const rowBg = "muted";
+  const rowBorder = "border";
+  const subtle = "muted-fg";
   return (
     <Flex
       align="center"
@@ -503,17 +528,17 @@ function PaymentRow({ method }: { method: PaymentMethod }) {
         flexShrink={0}
         boxSize="44px"
         borderRadius="full"
-        bg={method.bg}
+        bg="muted"
         align="center"
         justify="center"
       >
-        <Icon as={method.icon} boxSize="22px" color="white" />
+        <Icon as={method.icon} boxSize="22px" color="fg" />
       </Flex>
       <Box flex="1" minW={0}>
         <HStack spacing={2} mb={0.5}>
           <Text fontWeight={700}>{method.name}</Text>
           {method.preferred && (
-            <Badge colorScheme="green" variant="subtle">
+            <Badge variant="subtle">
               Preferred
             </Badge>
           )}
@@ -525,7 +550,7 @@ function PaymentRow({ method }: { method: PaymentMethod }) {
           isTruncated
         >
           {method.href ? (
-            <Link href={method.href} isExternal color="teal.300">
+            <Link href={method.href} isExternal color="primary" textDecoration="underline">
               {method.value}
             </Link>
           ) : (
@@ -551,14 +576,14 @@ function DonateModal({
   isOpen: boolean;
   onClose: () => void;
 }) {
-  const subtle = useColorModeValue("gray.600", "gray.400");
+  const subtle = "muted-fg";
   return (
     <Modal isOpen={isOpen} onClose={onClose} size="lg" isCentered scrollBehavior="inside">
-      <ModalOverlay backdropFilter="blur(8px)" />
+      <ModalOverlay />
       <ModalContent borderRadius="2xl">
         <ModalHeader>
           <HStack spacing={2}>
-            <Icon as={FiHeart} color="pink.400" />
+            <Icon as={FiHeart} color="primary" />
             <Text>Support Focus Dock</Text>
           </HStack>
         </ModalHeader>
@@ -584,10 +609,12 @@ export default function App() {
   return (
     <Box>
       <Nav onDonate={donate.onOpen} />
-      <Hero />
-      <Features />
-      <Team />
-      <Download />
+      <Box as="main">
+        <Hero />
+        <Features />
+        <Team />
+        <Download />
+      </Box>
       <Footer onDonate={donate.onOpen} />
       <DonateModal isOpen={donate.isOpen} onClose={donate.onClose} />
     </Box>

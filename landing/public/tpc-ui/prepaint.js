@@ -1,8 +1,4 @@
-<!doctype html>
-<html lang="en">
-  <head>
-    <meta charset="UTF-8" />
-    <!-- tpc-prepaint --><script data-theme-prepaint>(function(){try{
+(function(){try{
 var KEY="tpc_theme";
 var LEGACY_KEY="politogy_theme";
 var VALID=["light","dark","system"];
@@ -45,21 +41,4 @@ if(mql.addEventListener){mql.addEventListener("change",onChange);}else if(mql.ad
 function want(){var cookie=fromCookie();var ls=null;try{ls=localStorage.getItem(KEY);}catch(err){}var pref=cookie||ls||"system";return pref==="dark"||(pref!=="light"&&mql.matches);}
 var d=document.documentElement;
 new MutationObserver(function(){var w=want();if(w!==d.classList.contains("dark")){if(w){d.classList.add("dark");}else{d.classList.remove("dark");}try{d.style.colorScheme=w?"dark":"light";}catch(err){}}}).observe(d,{attributes:true,attributeFilter:["class"]});
-}catch(e){}})();</script><!-- /tpc-prepaint -->
-    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Focus Dock — an iOS-style replacement dock for macOS</title>
-    <meta name="description" content="Folder-by-drag-and-hold, iOS-style magnification, and a dock that finally feels like the Mac deserves. Free download." />
-    <meta property="og:title" content="Focus Dock — iOS-style dock for macOS" />
-    <meta property="og:description" content="Folder-by-drag-and-hold, iOS-style magnification, and a dock that finally feels like the Mac deserves." />
-    <meta property="og:image" content="/screenshots/hero.png" />
-    <meta name="tpc-policy-versions" content='{"terms":1,"privacy":1,"cookies":1}' />
-    <link rel="icon" type="image/svg+xml" href="/favicon.svg" />
-    <link rel="stylesheet" href="/tpc-ui/tpc-ui.css" />
-    <script src="/tpc-ui/consent.js" defer></script>
-    <script src="/tpc-ui/theme-toggle.js" defer></script>
-  </head>
-  <body class="bg-background text-foreground">
-    <div id="root"></div>
-    <script type="module" src="/src/main.tsx"></script>
-  </body>
-</html>
+}catch(e){}})();

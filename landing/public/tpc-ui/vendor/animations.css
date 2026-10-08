@@ -1,0 +1,139 @@
+/*
+ * @the-portland-company/ui-motion keyframes.
+ * Import this once (e.g. in the root layout) alongside the JS components.
+ * Keyframe patterns adapted from MIT Magic UI (https://magicui.design) —
+ * see NOTICE.
+ */
+
+@keyframes tpc-aurora {
+  0% {
+    background-position: 0% 50%;
+  }
+  50% {
+    background-position: 100% 50%;
+  }
+  100% {
+    background-position: 0% 50%;
+  }
+}
+
+@keyframes tpc-shimmer {
+  0% {
+    background-position: 0% 0%;
+  }
+  100% {
+    background-position: -200% 0%;
+  }
+}
+
+@keyframes tpc-marquee {
+  0% {
+    transform: translateX(0%);
+  }
+  100% {
+    transform: translateX(-100%);
+  }
+}
+
+@keyframes tpc-marquee-vertical {
+  0% {
+    transform: translateY(0%);
+  }
+  100% {
+    transform: translateY(-100%);
+  }
+}
+
+@keyframes tpc-border-beam {
+  0% {
+    offset-distance: 0%;
+  }
+  100% {
+    offset-distance: 100%;
+  }
+}
+
+@keyframes tpc-fade-up {
+  0% {
+    opacity: 0;
+    transform: translateY(12px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+@keyframes tpc-spotlight {
+  0% {
+    opacity: 0;
+    transform: translate(-72%, -62%) scale(0.5);
+  }
+  100% {
+    opacity: 1;
+    transform: translate(-50%, -40%) scale(1);
+  }
+}
+
+@keyframes tpc-gradient-text {
+  to {
+    background-position: 200% center;
+  }
+}
+
+.tpc-animate-aurora {
+  background-size: 200% 200%;
+  animation: tpc-aurora 14s ease infinite;
+}
+
+.tpc-animate-shimmer {
+  background-size: 200% 100%;
+  animation: tpc-shimmer 2.2s linear infinite;
+}
+
+.tpc-animate-marquee {
+  animation: tpc-marquee var(--tpc-marquee-duration, 28s) linear infinite;
+}
+
+.tpc-animate-marquee-vertical {
+  animation: tpc-marquee-vertical var(--tpc-marquee-duration, 28s) linear infinite;
+}
+
+.tpc-animate-border-beam {
+  offset-path: rect(0% auto 100% auto round calc(var(--tpc-beam-radius, 12px) * 1px));
+  animation: tpc-border-beam var(--tpc-beam-duration, 8s) linear infinite;
+}
+
+.tpc-animate-fade-up {
+  animation: tpc-fade-up var(--tpc-duration-slow, 360ms) var(--tpc-ease-standard, ease) both;
+}
+
+.tpc-animate-spotlight {
+  animation: tpc-spotlight var(--tpc-duration-slower, 600ms) var(--tpc-ease-emphasized, ease) both;
+}
+
+.tpc-animate-gradient-text {
+  background-size: 200% auto;
+  animation: tpc-gradient-text var(--tpc-gradient-duration, 4s) linear infinite;
+}
+
+/*
+ * Global reduced-motion kill-switch: every animation and CSS transition in
+ * this package (and anything else using these same custom properties) is
+ * disabled for a visitor who has asked the OS for reduced motion. This is
+ * deliberately broad (`*`) rather than per-class, so a future animation
+ * class added to this file is covered automatically.
+ */
+@media (prefers-reduced-motion: reduce) {
+  .tpc-animate-aurora,
+  .tpc-animate-shimmer,
+  .tpc-animate-marquee,
+  .tpc-animate-marquee-vertical,
+  .tpc-animate-border-beam,
+  .tpc-animate-fade-up,
+  .tpc-animate-spotlight,
+  .tpc-animate-gradient-text {
+    animation: none !important;
+    transition: none !important;
+  }
+}

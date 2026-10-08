@@ -1,0 +1,98 @@
+<!doctype html>
+<html lang="en">
+<head>
+<meta charset="utf-8">
+<script data-theme-prepaint>(function(){try{
+var KEY="tpc_theme";
+var LEGACY_KEY="politogy_theme";
+var VALID=["light","dark","system"];
+function fromCookie(){try{
+  var m=document.cookie.match(/(?:^|;\s*)tpc_theme=([^;]+)/);
+  if(m)return decodeURIComponent(m[1]);
+  var lm=document.cookie.match(/(?:^|;\s*)politogy_theme=([^;]+)/);
+  return lm?decodeURIComponent(lm[1]):null;
+}catch(e){return null;}}
+var cookie=fromCookie();
+var ls=null;try{ls=localStorage.getItem(KEY)||localStorage.getItem(LEGACY_KEY);}catch(e){}
+var pref=cookie||ls||"system";
+if(VALID.indexOf(pref)===-1)pref="system";
+if(cookie&&cookie!==ls){try{localStorage.setItem(KEY,cookie);}catch(e){}}
+var resolved=pref;
+if(pref==="system"){try{resolved=window.matchMedia("(prefers-color-scheme: dark)").matches?"dark":"light";}catch(e){resolved="light";}}
+var d=document.documentElement;
+if(resolved==="dark"){d.classList.add("dark");}else{d.classList.remove("dark");}
+try{d.style.colorScheme=resolved;}catch(e){}
+}catch(e){}})();
+(function(){try{
+var KEY="tpc_theme";
+function fromCookie(){try{
+  var m=document.cookie.match(/(?:^|;\s*)tpc_theme=([^;]+)/);
+  if(m)return decodeURIComponent(m[1]);
+  var lm=document.cookie.match(/(?:^|;\s*)politogy_theme=([^;]+)/);
+  return lm?decodeURIComponent(lm[1]):null;
+}catch(e){return null;}}
+var mql=window.matchMedia("(prefers-color-scheme: dark)");
+function onChange(e){
+  var cookie=fromCookie();
+  var ls=null;try{ls=localStorage.getItem(KEY);}catch(err){}
+  var pref=cookie||ls||"system";
+  if(pref!=="system")return;
+  var d=document.documentElement;
+  if(e.matches){d.classList.add("dark");}else{d.classList.remove("dark");}
+  try{d.style.colorScheme=e.matches?"dark":"light";}catch(err){}
+}
+if(mql.addEventListener){mql.addEventListener("change",onChange);}else if(mql.addListener){mql.addListener(onChange);}
+function want(){var cookie=fromCookie();var ls=null;try{ls=localStorage.getItem(KEY);}catch(err){}var pref=cookie||ls||"system";return pref==="dark"||(pref!=="light"&&mql.matches);}
+var d=document.documentElement;
+new MutationObserver(function(){var w=want();if(w!==d.classList.contains("dark")){if(w){d.classList.add("dark");}else{d.classList.remove("dark");}try{d.style.colorScheme=w?"dark":"light";}catch(err){}}}).observe(d,{attributes:true,attributeFilter:["class"]});
+}catch(e){}})();</script>
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Terms of Use | Focus Dock</title>
+<meta name="description" content="Terms of Use for Focus Dock by The Portland Company.">
+<link rel="canonical" href="https://focus-dock.pages.dev/terms/">
+<meta name="tpc-policy-versions" content="{&quot;terms&quot;:1,&quot;privacy&quot;:1,&quot;cookies&quot;:1}">
+<link rel="stylesheet" href="/tpc-ui/tpc-ui.css">
+<script src="/tpc-ui/consent.js" defer></script>
+<script src="/tpc-ui/theme-toggle.js" defer></script>
+</head>
+<body class="min-h-screen bg-background text-foreground antialiased">
+<header class="border-b">
+  <div class="mx-auto flex max-w-3xl items-center justify-between gap-4 px-6 py-3">
+    <a class="inline-flex min-h-11 items-center font-semibold" href="/">Focus Dock</a>
+    <button type="button" data-tpc-theme-toggle class="inline-flex min-h-11 cursor-pointer items-center rounded-md border px-3 text-sm hover:bg-accent"><span data-tpc-theme-label>Theme</span></button>
+  </div>
+</header>
+<main class="mx-auto max-w-3xl px-6 py-16" data-legal="terms" data-version="1">
+<h1 class="mb-6 text-4xl font-bold tracking-tight">Terms of Use</h1>
+<p class="my-4 text-muted-foreground"><em>Last updated: May 24, 2026</em></p>
+<p class="my-4 text-muted-foreground">These terms govern your use of theportlandcompany.com (the &quot;Site&quot;), the marketing website for The Portland Company (&quot;TPC,&quot; &quot;we,&quot; &quot;us&quot;). They are not a master services agreement and do not govern paid engagements, consulting, or development work — those are covered by a separate written contract signed by both parties.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Acceptance</h2>
+<p class="my-4 text-muted-foreground">By visiting or using this Site, you agree to these terms. If you do not agree, please do not use the Site. We may update these terms from time to time; continued use of the Site after an update means you accept the revised version.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Use of the site</h2>
+<p class="my-4 text-muted-foreground">You may use this Site to learn about TPC, view our work, and contact us about potential engagements. You agree not to use the Site to do anything illegal, harmful, or disruptive — including attempting to access non-public areas, probing for vulnerabilities, scraping content at a rate that degrades service, sending malware or unsolicited bulk messages, or impersonating any person or organization.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Intellectual property</h2>
+<p class="my-4 text-muted-foreground">All content on this Site — including text, graphics, logos, images, illustrations, layouts, and code — is owned by The Portland Company or licensed to us, and is protected by copyright, trademark, and other intellectual property laws. You may view and share the content for personal or business evaluation purposes. You may not republish, resell, or claim authorship of our content without prior written permission.</p>
+<p class="my-4 text-muted-foreground">If you submit ideas, suggestions, feedback, or comments to us through this Site or any related channel, you grant TPC a non-exclusive, royalty-free, perpetual, worldwide license to use that material — including the right to incorporate it into our work, marketing, or products — without obligation to you. We will not, however, use confidential project details you share with us during evaluation conversations for anything other than evaluating the engagement.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Disclaimer</h2>
+<p class="my-4 text-muted-foreground">The Site is provided &quot;as is&quot; and &quot;as available,&quot; without warranties of any kind, express or implied. We do our best to keep the information accurate and the site online, but we make no guarantees about availability, accuracy, completeness, or fitness for a particular purpose. Anything you read here is general information, not professional, legal, financial, or engineering advice for your specific situation.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Limitation of liability</h2>
+<p class="my-4 text-muted-foreground">To the fullest extent permitted by law, The Portland Company and its team will not be liable for any indirect, incidental, special, consequential, or punitive damages — or any loss of profits, revenue, data, or goodwill — arising out of your use of, or inability to use, this Site. Your sole remedy for dissatisfaction with the Site is to stop using it.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Governing law</h2>
+<p class="my-4 text-muted-foreground">These terms are governed by the laws of the State of Oregon, United States, without regard to its conflict-of-laws principles. Any dispute arising out of or related to these terms or your use of the Site will be resolved exclusively in the state or federal courts located in Multnomah County, Oregon, and you consent to personal jurisdiction there.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Changes to these terms</h2>
+<p class="my-4 text-muted-foreground">We may revise these terms at any time. When we make material changes, we will update the &quot;Last updated&quot; date at the top of this page. We encourage you to review this page periodically so you are aware of the current terms.</p>
+<h2 class="mt-10 mb-3 text-2xl font-semibold">Contact</h2>
+<p class="my-4 text-muted-foreground">Questions about these terms? Email Spencer at contact@theportlandcompany.com.</p>
+</main>
+<footer class="border-t">
+  <div class="mx-auto max-w-3xl px-6 py-6">
+  <nav class="flex flex-wrap items-center gap-x-6 gap-y-2 text-sm text-muted-foreground" aria-label="Legal">
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/terms">Terms</a>
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/privacy">Privacy Policy</a>
+    <a class="inline-flex min-h-11 items-center hover:text-foreground" href="/cookies">Cookie Policy</a>
+    <button type="button" class="inline-flex min-h-11 cursor-pointer items-center hover:text-foreground" data-tpc-cookie-settings>Cookie settings</button>
+  </nav>
+  </div>
+</footer>
+</body>
+</html>
